@@ -1,3 +1,8 @@
+from torch.nn import Module
+
+from deki_smpc.utils import FederatedLearningState
+
+
 class FedAvgClient:
 
     def __init__(
@@ -33,16 +38,26 @@ class FedAvgClient:
         self.fl_aggregation_server_port = fl_aggregation_server_port
         self.num_clients = num_clients
 
+        self.__connect_to_key_aggregation_server()
+        self.num_total_rounds = self.__connect_to_fl_aggregation_server()
+
+        # start key aggregation routine
+        self.__key_aggregation_routine()
+
+    def __key_aggregation_routine(self):
+        pass
+
     def __connect_to_key_aggregation_server(self):
         pass
 
     def __connect_to_fl_aggregation_server(self):
-        pass
+        return 10  # TODO: replace with actual number of rounds
 
     def __average_model(self):
         pass
 
-    def submit_model(self):
+    def submit_model(self, model: Module):
+        assert isinstance(model, Module), "Model must be a PyTorch module"
         # encrypt model
         # send model to fl server
         pass
@@ -50,11 +65,15 @@ class FedAvgClient:
     def receive_aggregated_model(self):
         # poll fl server for aggregated model
         # decrypt model
-        # average model
+        self.__average_model()
         pass
 
 
 if __name__ == "__main__":
+
+    from torchvision.models import resnet18
+
+    model = resnet18()
 
     client = FedAvgClient(
         key_aggregation_server_ip="127.0.0.1",
@@ -65,5 +84,5 @@ if __name__ == "__main__":
         preshared_secret="my_secure_presHared_secret_123!",
     )
 
-    client.submit_model()
+    client.submit_model(model=model)
     client.receive_aggregated_model()
