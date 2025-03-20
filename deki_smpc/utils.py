@@ -1,8 +1,29 @@
 import secrets
 import string
+from dataclasses import dataclass
+
+
+@dataclass
+class KeyPair:
+    round: int = 0
+    # This is a tensor of same shape as the model parameters
+    private_encryption_key: dict = None
+    # This is a tensor of same shape as the model parameters
+    shared_decryption_key: dict = None
+
+
+# Only precompute the keys for the next round
+@dataclass
+class KeyQueue:
+    this_round: KeyPair = None
+    next_round: KeyPair = None
 
 
 class SecurityUtils:
+
+    def __init__(self):
+        self.key_queue = KeyQueue()
+
     @staticmethod
     def generate_preshared_secret(length: int = 32) -> str:
         """Generate a cryptographically secure preshared secret.
