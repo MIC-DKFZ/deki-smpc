@@ -1,6 +1,10 @@
+import json
+from hashlib import sha256
+
+import requests
 from torch.nn import Module
 
-from deki_smpc.utils import FederatedLearningState
+from deki_smpc.models import KeyClientRegistration
 
 
 class FedAvgClient:
@@ -13,6 +17,7 @@ class FedAvgClient:
         fl_aggregation_server_port: int,
         num_clients: int = None,
         preshared_secret: str = None,
+        client_name: str = None,
     ):
         assert num_clients is not None, "Number of clients must be provided"
         assert num_clients >= 3, "Number of clients must be at least 3"
@@ -37,9 +42,14 @@ class FedAvgClient:
         self.fl_aggregation_server_ip = fl_aggregation_server_ip
         self.fl_aggregation_server_port = fl_aggregation_server_port
         self.num_clients = num_clients
-
+        self.preshared_secret = sha256(preshared_secret.encode()).hexdigest()
+        self.client_name = client_name
+        self.public_facing_ip = requests.get(
+            "https://api.ipify.org/?format=json"
+        ).json()["ip"]
         self.__connect_to_key_aggregation_server()
-        self.num_total_rounds = self.__connect_to_fl_aggregation_server()
+        self.num_total_fl_rounds = self.__connect_to_fl_aggregation_server()
+        self.current_fl_round = 0
 
         # start key aggregation routine
         self.__key_aggregation_routine()
@@ -48,7 +58,22 @@ class FedAvgClient:
         pass
 
     def __connect_to_key_aggregation_server(self):
-        pass
+
+        request_body = KeyClientRegistration(
+            ip_address=self.public_facing_ip,
+            client_name=self.client_name,
+            preshared_secret=self.preshared_secret,
+        )
+
+        response = requests.post(
+            url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/register",
+            data=json.dumps(request_body.dict()),
+        )
+
+        if response.status_code != 200:
+            raise ConnectionError(
+                f"Failed to connect to key aggregation server: {response.text}"
+            )
 
     def __connect_to_fl_aggregation_server(self):
         return 10  # TODO: replace with actual number of rounds
@@ -77,11 +102,12 @@ if __name__ == "__main__":
 
     client = FedAvgClient(
         key_aggregation_server_ip="127.0.0.1",
-        key_aggregation_server_port=5000,
+        key_aggregation_server_port=8080,
         fl_aggregation_server_ip="127.0.0.1",
-        fl_aggregation_server_port=5001,
+        fl_aggregation_server_port=8081,
         num_clients=3,
         preshared_secret="my_secure_presHared_secret_123!",
+        client_name="client_1",  # For better logging at the server‚
     )
 
     client.submit_model(model=model)

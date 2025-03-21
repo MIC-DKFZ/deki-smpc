@@ -10,7 +10,8 @@ setup(
     long_description_content_type="text/markdown",
     packages=find_packages(),
     install_requires=[
-        # List dependencies here, e.g. "numpy", "requests"
+        "requests",
+        "torch",
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
