@@ -107,7 +107,7 @@ if __name__ == "__main__":
         fl_aggregation_server_port=8081,
         num_clients=3,
         preshared_secret="my_secure_presHared_secret_123!",
-        client_name="client_1",  # For better logging at the server‚
+        client_name="client_1",  # For better logging at the server. MUST BE UNIQUE ACROSS ALL CLIENTS
     )
 
     client.submit_model(model=model)
