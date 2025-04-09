@@ -1,10 +1,16 @@
 import json
+import logging
+import threading
 from hashlib import sha256
+from time import sleep
 
 import requests
 from torch.nn import Module
+from torchvision.models import resnet18
 
 from deki_smpc.models import KeyClientRegistration
+
+logging.basicConfig(level=logging.INFO)
 
 
 class FedAvgClient:
@@ -54,8 +60,215 @@ class FedAvgClient:
         # start key aggregation routine
         self.__key_aggregation_routine()
 
+    def __phase_1_routine(self):
+        # Phase 1: Group key generation
+
+        phase = 1
+
+        phase_1_tasks = {
+            "upload": False,
+            "download": False,
+        }
+
+        while True:
+            response = requests.get(
+                url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/check_for_task",
+                data=json.dumps(
+                    {
+                        "client_name": self.client_name,
+                    }
+                ),
+            )
+            if response.status_code == 204:
+                logging.info(
+                    f"No task available for {self.client_name}. Continuing to poll."
+                )
+                # No task available, continue polling
+                sleep(1)
+                continue
+
+            if response.status_code != 200:
+                raise ConnectionError(
+                    f"Failed to connect to key aggregation server: {response.text}"
+                )
+            task = response.json()
+            logging.info(f"Task received for {self.client_name}: {task}")
+
+            if task["action"] == "upload":
+                # upload key
+                response = requests.post(
+                    url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/upload",
+                    data=json.dumps(
+                        {
+                            "client_name": self.client_name,
+                        }
+                    ),
+                )
+                if response.status_code != 200:
+                    raise ConnectionError(
+                        f"Failed to upload key to key aggregation server: {response.text}"
+                    )
+                # Mark the task as completed
+                phase_1_tasks["upload"] = True
+
+            elif task["action"] == "download":
+                # download key
+                response = requests.get(
+                    url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/download",
+                    data=json.dumps(
+                        {
+                            "client_name": self.client_name,
+                        }
+                    ),
+                )
+                if response.status_code != 200:
+                    raise ConnectionError(
+                        f"Failed to download key from key aggregation server: {response.text}"
+                    )
+                # Mark the task as completed
+                phase_1_tasks["download"] = True
+
+            if all(phase_1_tasks.values()):
+                # All tasks completed, exit the loop
+                logging.info(
+                    f"All phase 1 tasks completed for {self.client_name}. Exiting key aggregation routine."
+                )
+                break
+            sleep(1)  # Sleep for a while before checking again
+
+    def __phase_2_routine(self):
+        # Phase 2:
+
+        phase = 2
+
+        response = requests.get(
+            url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/tasks/participants",
+        )
+        if response.status_code != 200:
+            raise ConnectionError(
+                f"Failed to connect to key aggregation server: {response.text}"
+            )
+        participants = response.json()
+        if self.client_name not in participants["phase_2_clients"]:
+            logging.info(
+                f"{self.client_name} is not a participant in phase 2. Exiting key aggregation routine."
+            )
+            return
+
+        while True:
+            response = requests.get(
+                url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/check_for_task",
+                data=json.dumps(
+                    {
+                        "client_name": self.client_name,
+                    }
+                ),
+            )
+            # if response.status_code == 204:
+            #     logging.info(
+            #         f"No task available for {self.client_name}. Continuing to poll."
+            #     )
+            # # No task available, continue polling
+            # response = requests.get(
+            #     url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/check_for_task",
+            # )
+            # if response.status_code != 200:
+            #     raise ConnectionError(
+            #         f"Failed to connect to key aggregation server: {response.text}"
+            #     )
+            # open_tasks = response.json()
+
+            # if open_tasks["phase"] == 1:
+            #     logging.info(f"Phase 1 tasks are still active. Waiting...")
+            #     sleep(1)
+            #     continue
+
+            # try:
+            #     if (
+            #         len(open_tasks["active"]) == 0
+            #         and len(open_tasks["pending"]) == 0
+            #     ):
+            #         # No active tasks, exit the loop
+            #         logging.info(
+            #             f"All phase 2 tasks completed for {self.client_name}. Exiting key aggregation routine."
+            #         )
+            #         return
+            # except Exception as e:
+            #     logging.error(f"{open_tasks}")
+            #     raise e
+            # sleep(1)
+            # continue
+            if response.status_code == 204:
+
+                response = requests.get(
+                    url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/active_tasks",
+                )
+
+                if response.status_code != 200:
+                    raise ConnectionError(
+                        f"Failed to connect to key aggregation server: {response.text}"
+                    )
+
+                tasks = response.json()
+
+                if "active" in tasks:
+                    if len(tasks["active"]) == 0 and len(tasks["pending"]) == 0:
+                        # No active tasks, exit the loop
+                        logging.info(
+                            f"All phase 2 tasks completed for {self.client_name}. Exiting key aggregation routine."
+                        )
+                        break
+                logging.info(
+                    f"No task available for {self.client_name}. Continuing to poll."
+                )
+                # No task available, continue polling
+                sleep(1)
+                continue
+
+            if response.status_code != 200:
+                raise ConnectionError(
+                    f"Failed to connect to key aggregation server: {response.text}"
+                )
+
+            task = response.json()
+            logging.info(f"Task received for {self.client_name}: {task}")
+
+            if task["action"] == "upload":
+                # upload key
+                response = requests.post(
+                    url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/upload",
+                    data=json.dumps(
+                        {
+                            "client_name": self.client_name,
+                        }
+                    ),
+                )
+                if response.status_code != 200:
+                    raise ConnectionError(
+                        f"Failed to upload key to key aggregation server: {response.text}"
+                    )
+
+            elif task["action"] == "download":
+                # download key
+                response = requests.get(
+                    url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/download",
+                    data=json.dumps(
+                        {
+                            "client_name": self.client_name,
+                        }
+                    ),
+                )
+                if response.status_code != 200:
+                    raise ConnectionError(
+                        f"Failed to download key from key aggregation server: {response.text}"
+                    )
+
+            sleep(1)  # Sleep for a while before checking again
+
     def __key_aggregation_routine(self):
-        pass
+
+        self.__phase_1_routine()
+        self.__phase_2_routine()
 
     def __connect_to_key_aggregation_server(self):
 
@@ -95,9 +308,19 @@ class FedAvgClient:
 
 
 if __name__ == "__main__":
-
+    import argparse
     from torchvision.models import resnet18
 
+    parser = argparse.ArgumentParser(description="Federated Learning Client")
+    parser.add_argument(
+        # client
+        "--client_name",
+        type=str,
+        default="client_20",
+        help="Name of the client",
+    )
+
+    client_name = parser.parse_args().client_name
     model = resnet18()
 
     client = FedAvgClient(
@@ -107,7 +330,7 @@ if __name__ == "__main__":
         fl_aggregation_server_port=8081,
         num_clients=3,
         preshared_secret="my_secure_presHared_secret_123!",
-        client_name="client_1",  # For better logging at the server. MUST BE UNIQUE ACROSS ALL CLIENTS
+        client_name=client_name,  # For better logging at the server. MUST BE UNIQUE ACROSS ALL CLIENTS
     )
 
     client.submit_model(model=model)
