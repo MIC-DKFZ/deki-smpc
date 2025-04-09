@@ -130,9 +130,6 @@ class FedAvgClient:
 
             if all(phase_1_tasks.values()):
                 # All tasks completed, exit the loop
-                logging.info(
-                    f"All phase 1 tasks completed for {self.client_name}. Exiting key aggregation routine."
-                )
                 break
             sleep(1)  # Sleep for a while before checking again
 
@@ -164,40 +161,7 @@ class FedAvgClient:
                     }
                 ),
             )
-            # if response.status_code == 204:
-            #     logging.info(
-            #         f"No task available for {self.client_name}. Continuing to poll."
-            #     )
-            # # No task available, continue polling
-            # response = requests.get(
-            #     url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/check_for_task",
-            # )
-            # if response.status_code != 200:
-            #     raise ConnectionError(
-            #         f"Failed to connect to key aggregation server: {response.text}"
-            #     )
-            # open_tasks = response.json()
 
-            # if open_tasks["phase"] == 1:
-            #     logging.info(f"Phase 1 tasks are still active. Waiting...")
-            #     sleep(1)
-            #     continue
-
-            # try:
-            #     if (
-            #         len(open_tasks["active"]) == 0
-            #         and len(open_tasks["pending"]) == 0
-            #     ):
-            #         # No active tasks, exit the loop
-            #         logging.info(
-            #             f"All phase 2 tasks completed for {self.client_name}. Exiting key aggregation routine."
-            #         )
-            #         return
-            # except Exception as e:
-            #     logging.error(f"{open_tasks}")
-            #     raise e
-            # sleep(1)
-            # continue
             if response.status_code == 204:
 
                 response = requests.get(
@@ -268,6 +232,32 @@ class FedAvgClient:
     def __key_aggregation_routine(self):
 
         self.__phase_1_routine()
+
+        # Wait for all clients to finish phase 1
+        while True:
+            response = requests.get(
+                url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/1/active_tasks",
+            )
+            if response.status_code != 200:
+                raise ConnectionError(
+                    f"Failed to connect to key aggregation server: {response.text}"
+                )
+            tasks = response.json()
+            if len(tasks["active"]) == 0 and len(tasks["pending"]) == 0:
+                # No active tasks, exit the loop
+                logging.info(
+                    f"All phase 1 tasks completed for {self.client_name}. Exiting key aggregation routine."
+                )
+                break
+            logging.info(
+                f"Waiting for all clients to finish phase 1. Continuing to poll."
+            )
+            sleep(1)
+
+        logging.info(
+            f"All clients have finished phase 1. Proceeding to phase 2 for {self.client_name}."
+        )
+
         self.__phase_2_routine()
 
     def __connect_to_key_aggregation_server(self):
