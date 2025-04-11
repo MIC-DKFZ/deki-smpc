@@ -1,3 +1,5 @@
+import gzip
+import io
 import json
 import logging
 import threading
@@ -5,10 +7,12 @@ from hashlib import sha256
 from time import sleep
 
 import requests
+import torch
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from models import CheckForTaskRequest, KeyClientRegistration
 from torch.nn import Module
 from torchvision.models import resnet18
-
-from deki_smpc.models import KeyClientRegistration
+from utils import SecurityUtils
 
 logging.basicConfig(level=logging.INFO)
 
@@ -24,6 +28,7 @@ class FedAvgClient:
         num_clients: int = None,
         preshared_secret: str = None,
         client_name: str = None,
+        model: Module = None,
     ):
         assert num_clients is not None, "Number of clients must be provided"
         assert num_clients >= 3, "Number of clients must be at least 3"
@@ -56,9 +61,51 @@ class FedAvgClient:
         self.__connect_to_key_aggregation_server()
         self.num_total_fl_rounds = self.__connect_to_fl_aggregation_server()
         self.current_fl_round = 0
+        self.model = model
 
         # start key aggregation routine
         self.__key_aggregation_routine()
+
+    def __upload_key(self, model: Module, phase: int):
+        # 1. Extract state_dict
+        state_dict = model.state_dict()
+
+        # 2. Serialize and compress
+        buffer = io.BytesIO()
+        with gzip.GzipFile(fileobj=buffer, mode="wb") as f:
+            torch.save(state_dict, f)
+        buffer.seek(0)
+
+        response = requests.post(
+            url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/upload",
+            files={
+                "key": ("model.pt.gz", buffer, "application/octet-stream"),
+                "client_name": (None, self.client_name),
+            },
+        )
+        if response.status_code != 200:
+            raise ConnectionError(
+                f"Failed to upload key to key aggregation server: {response.text}"
+            )
+
+    def __download_key(self, phase: int) -> dict:
+        response = requests.get(
+            url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/download",
+            json={"client_name": self.client_name},
+            stream=True,
+        )
+
+        if response.status_code != 200:
+            raise ConnectionError(
+                f"Failed to download key from key aggregation server: {response.text}"
+            )
+
+        # Decompress and load the state_dict
+        buffer = io.BytesIO(response.content)
+        with gzip.GzipFile(fileobj=buffer, mode="rb") as f:
+            state_dict = torch.load(f, map_location="cpu")
+
+        return state_dict
 
     def __phase_1_routine(self):
         # Phase 1: Group key generation
@@ -96,35 +143,14 @@ class FedAvgClient:
 
             if task["action"] == "upload":
                 # upload key
-                response = requests.post(
-                    url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/upload",
-                    data=json.dumps(
-                        {
-                            "client_name": self.client_name,
-                        }
-                    ),
-                )
-                if response.status_code != 200:
-                    raise ConnectionError(
-                        f"Failed to upload key to key aggregation server: {response.text}"
-                    )
+                self.__upload_key(model=self.model, phase=phase)
                 # Mark the task as completed
                 phase_1_tasks["upload"] = True
 
             elif task["action"] == "download":
                 # download key
-                response = requests.get(
-                    url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/download",
-                    data=json.dumps(
-                        {
-                            "client_name": self.client_name,
-                        }
-                    ),
-                )
-                if response.status_code != 200:
-                    raise ConnectionError(
-                        f"Failed to download key from key aggregation server: {response.text}"
-                    )
+                state_dict = self.__download_key(phase=phase)
+                logging.info(f"Key downloaded for {self.client_name}: {state_dict}")
                 # Mark the task as completed
                 phase_1_tasks["download"] = True
 
@@ -199,33 +225,12 @@ class FedAvgClient:
 
             if task["action"] == "upload":
                 # upload key
-                response = requests.post(
-                    url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/upload",
-                    data=json.dumps(
-                        {
-                            "client_name": self.client_name,
-                        }
-                    ),
-                )
-                if response.status_code != 200:
-                    raise ConnectionError(
-                        f"Failed to upload key to key aggregation server: {response.text}"
-                    )
+                self.__upload_key(model=self.model, phase=phase)
 
             elif task["action"] == "download":
                 # download key
-                response = requests.get(
-                    url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/download",
-                    data=json.dumps(
-                        {
-                            "client_name": self.client_name,
-                        }
-                    ),
-                )
-                if response.status_code != 200:
-                    raise ConnectionError(
-                        f"Failed to download key from key aggregation server: {response.text}"
-                    )
+                state_dict = self.__download_key(phase=phase)
+                logging.info(f"Key downloaded for {self.client_name}: {state_dict}")
 
             sleep(1)  # Sleep for a while before checking again
 
@@ -299,7 +304,25 @@ class FedAvgClient:
 
 if __name__ == "__main__":
     import argparse
-    from torchvision.models import resnet18
+
+    import torch
+    import torch.nn as nn
+
+    class LinearModel(nn.Module):
+        def __init__(self):
+            super(LinearModel, self).__init__()
+            self.linear = nn.Linear(in_features=1, out_features=10)
+            with torch.no_grad():
+                self.linear.weight.fill_(1.0)
+                self.linear.bias.fill_(0.0)
+
+        def forward(self, x):
+            return self.linear(x)
+
+    model = LinearModel()
+
+    # masked_dict = SecurityUtils.generate_secure_random_mask(model)
+    # print(masked_dict)
 
     parser = argparse.ArgumentParser(description="Federated Learning Client")
     parser.add_argument(
@@ -311,7 +334,6 @@ if __name__ == "__main__":
     )
 
     client_name = parser.parse_args().client_name
-    model = resnet18()
 
     client = FedAvgClient(
         key_aggregation_server_ip="127.0.0.1",
@@ -321,6 +343,7 @@ if __name__ == "__main__":
         num_clients=3,
         preshared_secret="my_secure_presHared_secret_123!",
         client_name=client_name,  # For better logging at the server. MUST BE UNIQUE ACROSS ALL CLIENTS
+        model=model,
     )
 
     client.submit_model(model=model)

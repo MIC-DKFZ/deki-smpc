@@ -1,6 +1,9 @@
 import secrets
 import string
 from dataclasses import dataclass
+import subprocess
+import torch
+import itertools
 
 
 @dataclass
@@ -51,3 +54,18 @@ class SecurityUtils:
         secrets.SystemRandom().shuffle(secret)
 
         return "".join(secret)
+
+    @staticmethod
+    def generate_secure_random_mask(model: torch.nn.Module) -> dict:
+        """
+        Generates a dictionary of secure random tensors with the same shape
+        as the parameters of a given PyTorch model using the secrets module.
+        """
+        mask = {}
+        for name, param in model.named_parameters():
+            num_elements = param.numel()
+            num_bytes = num_elements * 4  # 4 bytes per 32-bit int
+            random_bytes = bytes([secrets.randbelow(256) for _ in range(num_bytes)])
+            random_tensor = torch.frombuffer(random_bytes, dtype=torch.int32)
+            mask[name] = random_tensor.view(param.shape)
+        return mask
