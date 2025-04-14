@@ -106,10 +106,27 @@ class FedAvgClient:
 
         return state_dict
 
+    def __add_keys(self, downloaded_state_dict: dict):
+        """
+        Add the downloaded state_dict values to the existing state_dict values.
+        This operation is performed element-wise for each tensor in the state_dict.
+        """
+        logging.info(f"Adding keys {self.state_dict} and {downloaded_state_dict}")
+
+        if self.state_dict is None:
+            self.state_dict = downloaded_state_dict
+        else:
+            for key in self.state_dict:
+                if key in downloaded_state_dict:
+                    self.state_dict[key] += downloaded_state_dict[key]
+
     def __phase_1_routine(self):
         # Phase 1: Group key generation
 
         phase = 1
+
+        first_check = True
+        first_in_group = False
 
         phase_1_tasks = {
             "upload": False,
@@ -126,9 +143,8 @@ class FedAvgClient:
                 ),
             )
             if response.status_code == 204:
-                logging.info(
-                    f"No task available for {self.client_name}. Continuing to poll."
-                )
+                if first_check:
+                    first_check = False
                 # No task available, continue polling
                 sleep(1)
                 continue
@@ -141,6 +157,9 @@ class FedAvgClient:
             logging.info(f"Task received for {self.client_name}: {task}")
 
             if task["action"] == "upload":
+                if first_check:
+                    first_in_group = True
+                    first_check = False
                 # upload key
                 self.__upload_key(state_dict=self.state_dict, phase=phase)
                 # Mark the task as completed
@@ -148,8 +167,15 @@ class FedAvgClient:
 
             elif task["action"] == "download":
                 # download key
-                state_dict = self.__download_key(phase=phase)
-                logging.info(f"Key downloaded for {self.client_name}: {state_dict}")
+                downloaded_state_dict = self.__download_key(phase=phase)
+                logging.info(
+                    f"Key downloaded for {self.client_name}: {downloaded_state_dict}"
+                )
+                if first_in_group:
+                    self.state_dict = downloaded_state_dict
+                else:
+                    # Add the downloaded keys to the existing ones
+                    self.__add_keys(downloaded_state_dict)
                 # Mark the task as completed
                 phase_1_tasks["download"] = True
 
@@ -207,9 +233,6 @@ class FedAvgClient:
                             f"All phase 2 tasks completed for {self.client_name}. Exiting key aggregation routine."
                         )
                         break
-                logging.info(
-                    f"No task available for {self.client_name}. Continuing to poll."
-                )
                 # No task available, continue polling
                 sleep(1)
                 continue
@@ -230,11 +253,85 @@ class FedAvgClient:
                 # download key
                 state_dict = self.__download_key(phase=phase)
                 logging.info(f"Key downloaded for {self.client_name}: {state_dict}")
+                # Add the downloaded keys to the existing ones
+                self.__add_keys(state_dict)
 
             sleep(1)  # Sleep for a while before checking again
 
-    def __key_aggregation_routine(self):
+    def __phase_3_routine(self):
+        """
+        Phase 3: Final sum upload and download.
+        """
+        phase = 3
 
+        # Check if the client is the recipient of the final sum
+        response = requests.get(
+            url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/final/recipient",
+        )
+
+        if response.status_code != 200:
+            raise ConnectionError(
+                f"Failed to connect to key aggregation server: {response.text}"
+            )
+
+        recipient_info = response.json()
+        if recipient_info.get("recipient") == self.client_name:
+            # Upload the final sum
+            buffer = io.BytesIO()
+            with gzip.GzipFile(fileobj=buffer, mode="wb") as f:
+                torch.save(self.state_dict, f)
+            buffer.seek(0)
+
+            upload_response = requests.post(
+                url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/final/upload",
+                files={
+                    "final_sum": (
+                        "final_weights.pt.gz",
+                        buffer,
+                        "application/octet-stream",
+                    ),
+                    "client_name": (None, self.client_name),
+                },
+            )
+
+            if upload_response.status_code != 200:
+                raise ConnectionError(
+                    f"Failed to upload final sum to key aggregation server: {upload_response.text}"
+                )
+
+            logging.info(f"Final sum uploaded by {self.client_name}.")
+            return
+
+        # Download the final sum
+        while True:
+            response = requests.get(
+                url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/final/download",
+                stream=True,
+            )
+
+            if response.status_code == 200:
+                # Decompress and load the final state_dict
+                buffer = io.BytesIO(response.content)
+                with gzip.GzipFile(fileobj=buffer, mode="rb") as f:
+                    final_state_dict = torch.load(f, map_location="cpu")
+
+                logging.info(
+                    f"Final sum downloaded for {self.client_name}: {final_state_dict}"
+                )
+
+                # Update the local state_dict with the final sum
+                self.state_dict = final_state_dict
+                break
+
+            elif response.status_code == 404:
+                sleep(1)
+            else:
+                raise ConnectionError(
+                    f"Failed to download final sum from key aggregation server: {response.text}"
+                )
+
+    def __key_aggregation_routine(self):
+        logging.info("-- PHASE 1 --")
         self.__phase_1_routine()
 
         # Wait for all clients to finish phase 1
@@ -253,16 +350,16 @@ class FedAvgClient:
                     f"All phase 1 tasks completed for {self.client_name}. Exiting key aggregation routine."
                 )
                 break
-            logging.info(
-                f"Waiting for all clients to finish phase 1. Continuing to poll."
-            )
             sleep(1)
 
         logging.info(
             f"All clients have finished phase 1. Proceeding to phase 2 for {self.client_name}."
         )
 
+        logging.info("-- PHASE 2 --")
         self.__phase_2_routine()
+        logging.info("-- PHASE 3 --")
+        self.__phase_3_routine()
 
     def __connect_to_key_aggregation_server(self):
 
