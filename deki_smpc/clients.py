@@ -59,16 +59,15 @@ class FedAvgClient:
             "https://api.ipify.org/?format=json"
         ).json()["ip"]
         self.__connect_to_key_aggregation_server()
-        self.num_total_fl_rounds = self.__connect_to_fl_aggregation_server()
         self.current_fl_round = 0
         self.model = model
+        self.state_dict = model.state_dict() if model else None
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # start key aggregation routine
         self.__key_aggregation_routine()
 
-    def __upload_key(self, model: Module, phase: int):
-        # 1. Extract state_dict
-        state_dict = model.state_dict()
+    def __upload_key(self, state_dict: dict, phase: int):
 
         # 2. Serialize and compress
         buffer = io.BytesIO()
@@ -143,7 +142,7 @@ class FedAvgClient:
 
             if task["action"] == "upload":
                 # upload key
-                self.__upload_key(model=self.model, phase=phase)
+                self.__upload_key(state_dict=self.state_dict, phase=phase)
                 # Mark the task as completed
                 phase_1_tasks["upload"] = True
 
@@ -225,7 +224,7 @@ class FedAvgClient:
 
             if task["action"] == "upload":
                 # upload key
-                self.__upload_key(model=self.model, phase=phase)
+                self.__upload_key(state_dict=self.state_dict, phase=phase)
 
             elif task["action"] == "download":
                 # download key
@@ -283,24 +282,6 @@ class FedAvgClient:
                 f"Failed to connect to key aggregation server: {response.text}"
             )
 
-    def __connect_to_fl_aggregation_server(self):
-        return 10  # TODO: replace with actual number of rounds
-
-    def __average_model(self):
-        pass
-
-    def submit_model(self, model: Module):
-        assert isinstance(model, Module), "Model must be a PyTorch module"
-        # encrypt model
-        # send model to fl server
-        pass
-
-    def receive_aggregated_model(self):
-        # poll fl server for aggregated model
-        # decrypt model
-        self.__average_model()
-        pass
-
 
 if __name__ == "__main__":
     import argparse
@@ -345,6 +326,3 @@ if __name__ == "__main__":
         client_name=client_name,  # For better logging at the server. MUST BE UNIQUE ACROSS ALL CLIENTS
         model=model,
     )
-
-    client.submit_model(model=model)
-    client.receive_aggregated_model()
