@@ -60,8 +60,9 @@ class FedAvgClient:
         ).json()["ip"]
         self.__connect_to_key_aggregation_server()
         self.current_fl_round = 0
-        self.model = model
+        self.model = model.float() if model else None
         self.state_dict = model.state_dict() if model else None
+        self.mask_key = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # start key aggregation routine
@@ -120,6 +121,57 @@ class FedAvgClient:
                 if key in downloaded_state_dict:
                     self.state_dict[key] += downloaded_state_dict[key]
 
+    def __convert_state_dict_to_int32(self, state_dict: dict) -> dict:
+        """
+        Convert the state_dict tensors to 32-bit signed integers with minimal precision loss.
+        """
+        int32_state_dict = {}
+        for key, tensor in state_dict.items():
+            int32_state_dict[key] = (tensor * (2**16)).to(torch.int32)
+        return int32_state_dict
+
+    def __convert_int32_to_state_dict(self, int32_state_dict: dict) -> dict:
+        """
+        Convert the 32-bit signed integer state_dict back to 32-bit float tensors.
+        """
+        state_dict = {}
+        for key, tensor in int32_state_dict.items():
+            state_dict[key] = (tensor.to(torch.float32)) / (2**16)
+        return state_dict
+
+    def __shield_key(self, state_dict: dict):
+        """
+        Shield the state_dict by applying a random mask to each tensor.
+        The mask is generated using the SecurityUtils class.
+        """
+        # Convert state_dict to int32
+        int32_state_dict = self.__convert_state_dict_to_int32(state_dict)
+
+        if self.mask_key is None:
+            self.mask_key = SecurityUtils.generate_secure_random_mask(int32_state_dict)
+            logging.info(f"Mask key generated for {self.client_name}: {self.mask_key}")
+
+        # Apply the mask to the int32_state_dict
+        for key in int32_state_dict:
+            int32_state_dict[key] += self.mask_key[key]
+
+        return int32_state_dict
+
+    def __unshield_key(self, shielded_state_dict: dict):
+        """
+        Unshield the state_dict by removing the random mask from each tensor.
+        The mask is generated using the SecurityUtils class.
+        """
+        if self.mask_key is None:
+            raise ValueError("Mask key is not set. Cannot unshield the state_dict.")
+
+        # Remove the mask from the shielded_state_dict
+        for key in shielded_state_dict:
+            shielded_state_dict[key] -= self.mask_key[key]
+
+        # Convert back to float32 state_dict
+        return self.__convert_int32_to_state_dict(shielded_state_dict)
+
     def __phase_1_routine(self):
         # Phase 1: Group key generation
 
@@ -160,6 +212,10 @@ class FedAvgClient:
                 if first_check:
                     first_in_group = True
                     first_check = False
+
+                if first_in_group:
+                    # Shield the state_dict before uploading
+                    self.state_dict = self.__shield_key(self.state_dict)
                 # upload key
                 self.__upload_key(state_dict=self.state_dict, phase=phase)
                 # Mark the task as completed
@@ -173,6 +229,8 @@ class FedAvgClient:
                 )
                 if first_in_group:
                     self.state_dict = downloaded_state_dict
+                    # Unshield the state_dict after downloading
+                    self.state_dict = self.__unshield_key(self.state_dict)
                 else:
                     # Add the downloaded keys to the existing ones
                     self.__add_keys(downloaded_state_dict)
@@ -397,7 +455,7 @@ if __name__ == "__main__":
         def forward(self, x):
             return self.linear(x)
 
-    model = LinearModel()
+    model = resnet18()
 
     # masked_dict = SecurityUtils.generate_secure_random_mask(model)
     # print(masked_dict)
