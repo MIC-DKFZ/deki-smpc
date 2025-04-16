@@ -156,7 +156,14 @@ class FedAvgClient:
                         downloaded_state_dict[key] = downloaded_state_dict[key].to(
                             self.state_dict[key].dtype
                         )
+                    # Move tensors to GPU for addition
+                    self.state_dict[key] = self.state_dict[key].to(self.device)
+                    downloaded_state_dict[key] = downloaded_state_dict[key].to(
+                        self.device
+                    )
                     self.state_dict[key] += downloaded_state_dict[key]
+                    # Offload tensors back to CPU
+                    self.state_dict[key] = self.state_dict[key].cpu()
 
     @__measure_time
     def __convert_state_dict_to_int32(self, state_dict: dict) -> dict:
@@ -189,11 +196,15 @@ class FedAvgClient:
 
         if self.mask_key is None:
             self.mask_key = SecurityUtils.generate_secure_random_mask(int32_state_dict)
-            # logging.info(f"Mask key generated for {self.client_name}: {self.mask_key}")
 
         # Apply the mask to the int32_state_dict
         for key in int32_state_dict:
+            # Move tensors to GPU for masking
+            int32_state_dict[key] = int32_state_dict[key].to(self.device)
+            self.mask_key[key] = self.mask_key[key].to(self.device)
             int32_state_dict[key] += self.mask_key[key]
+            # Offload tensors back to CPU
+            int32_state_dict[key] = int32_state_dict[key].cpu()
 
         return int32_state_dict
 
@@ -208,7 +219,12 @@ class FedAvgClient:
 
         # Remove the mask from the shielded_state_dict
         for key in shielded_state_dict:
+            # Move tensors to GPU for unmasking
+            shielded_state_dict[key] = shielded_state_dict[key].to(self.device)
+            self.mask_key[key] = self.mask_key[key].to(self.device)
             shielded_state_dict[key] -= self.mask_key[key]
+            # Offload tensors back to CPU
+            shielded_state_dict[key] = shielded_state_dict[key].cpu()
 
         # Convert back to float32 state_dict
         return self.__convert_int32_to_state_dict(shielded_state_dict)
