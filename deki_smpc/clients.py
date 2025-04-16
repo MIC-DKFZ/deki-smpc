@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import threading
+import time
 from hashlib import sha256
 from time import sleep
 
@@ -68,6 +69,35 @@ class FedAvgClient:
         # start key aggregation routine
         self.__key_aggregation_routine()
 
+    @staticmethod
+    def __measure_time(func):
+        """
+        Decorator to measure the execution time of a function.
+        """
+
+        def wrapper(*args, **kwargs):
+            start_time = time.time()
+            result = func(*args, **kwargs)
+            end_time = time.time()
+            logging.info(
+                f"Execution time for {func.__name__}: {end_time - start_time:.2f} seconds"
+            )
+            return result
+
+        return wrapper
+
+    def __measure_request_time(self, request_func, *args, **kwargs):
+        """
+        Measure the time taken for a request.
+        """
+        url = kwargs.get("url", "Unknown URL")
+        start_time = time.time()
+        response = request_func(*args, **kwargs)
+        end_time = time.time()
+        logging.info(f"Request to {url} took {end_time - start_time:.2f} seconds")
+        return response
+
+    @__measure_time
     def __upload_key(self, state_dict: dict, phase: int):
 
         # 2. Serialize and compress
@@ -76,7 +106,8 @@ class FedAvgClient:
             torch.save(state_dict, f)
         buffer.seek(0)
 
-        response = requests.post(
+        response = self.__measure_request_time(
+            requests.post,
             url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/upload",
             files={
                 "key": ("model.pt.gz", buffer, "application/octet-stream"),
@@ -88,8 +119,10 @@ class FedAvgClient:
                 f"Failed to upload key to key aggregation server: {response.text}"
             )
 
+    @__measure_time
     def __download_key(self, phase: int) -> dict:
-        response = requests.get(
+        response = self.__measure_request_time(
+            requests.get,
             url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/download",
             json={"client_name": self.client_name},
             stream=True,
@@ -107,20 +140,25 @@ class FedAvgClient:
 
         return state_dict
 
+    @__measure_time
     def __add_keys(self, downloaded_state_dict: dict):
         """
         Add the downloaded state_dict values to the existing state_dict values.
         This operation is performed element-wise for each tensor in the state_dict.
         """
-        logging.info(f"Adding keys {self.state_dict} and {downloaded_state_dict}")
-
         if self.state_dict is None:
             self.state_dict = downloaded_state_dict
         else:
             for key in self.state_dict:
                 if key in downloaded_state_dict:
+                    # Ensure both tensors have the same data type before addition
+                    if self.state_dict[key].dtype != downloaded_state_dict[key].dtype:
+                        downloaded_state_dict[key] = downloaded_state_dict[key].to(
+                            self.state_dict[key].dtype
+                        )
                     self.state_dict[key] += downloaded_state_dict[key]
 
+    @__measure_time
     def __convert_state_dict_to_int32(self, state_dict: dict) -> dict:
         """
         Convert the state_dict tensors to 32-bit signed integers with minimal precision loss.
@@ -130,6 +168,7 @@ class FedAvgClient:
             int32_state_dict[key] = (tensor * (2**16)).to(torch.int32)
         return int32_state_dict
 
+    @__measure_time
     def __convert_int32_to_state_dict(self, int32_state_dict: dict) -> dict:
         """
         Convert the 32-bit signed integer state_dict back to 32-bit float tensors.
@@ -139,6 +178,7 @@ class FedAvgClient:
             state_dict[key] = (tensor.to(torch.float32)) / (2**16)
         return state_dict
 
+    @__measure_time
     def __shield_key(self, state_dict: dict):
         """
         Shield the state_dict by applying a random mask to each tensor.
@@ -149,7 +189,7 @@ class FedAvgClient:
 
         if self.mask_key is None:
             self.mask_key = SecurityUtils.generate_secure_random_mask(int32_state_dict)
-            logging.info(f"Mask key generated for {self.client_name}: {self.mask_key}")
+            # logging.info(f"Mask key generated for {self.client_name}: {self.mask_key}")
 
         # Apply the mask to the int32_state_dict
         for key in int32_state_dict:
@@ -157,6 +197,7 @@ class FedAvgClient:
 
         return int32_state_dict
 
+    @__measure_time
     def __unshield_key(self, shielded_state_dict: dict):
         """
         Unshield the state_dict by removing the random mask from each tensor.
@@ -172,6 +213,7 @@ class FedAvgClient:
         # Convert back to float32 state_dict
         return self.__convert_int32_to_state_dict(shielded_state_dict)
 
+    @__measure_time
     def __phase_1_routine(self):
         # Phase 1: Group key generation
 
@@ -186,7 +228,8 @@ class FedAvgClient:
         }
 
         while True:
-            response = requests.get(
+            response = self.__measure_request_time(
+                requests.get,
                 url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/check_for_task",
                 data=json.dumps(
                     {
@@ -224,9 +267,9 @@ class FedAvgClient:
             elif task["action"] == "download":
                 # download key
                 downloaded_state_dict = self.__download_key(phase=phase)
-                logging.info(
-                    f"Key downloaded for {self.client_name}: {downloaded_state_dict}"
-                )
+                # logging.info(
+                #     f"Key downloaded for {self.client_name}: {downloaded_state_dict}"
+                # )
                 if first_in_group:
                     self.state_dict = downloaded_state_dict
                     # Unshield the state_dict after downloading
@@ -242,12 +285,14 @@ class FedAvgClient:
                 break
             sleep(1)  # Sleep for a while before checking again
 
+    @__measure_time
     def __phase_2_routine(self):
         # Phase 2:
 
         phase = 2
 
-        response = requests.get(
+        response = self.__measure_request_time(
+            requests.get,
             url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/tasks/participants",
         )
         if response.status_code != 200:
@@ -262,7 +307,8 @@ class FedAvgClient:
             return
 
         while True:
-            response = requests.get(
+            response = self.__measure_request_time(
+                requests.get,
                 url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/check_for_task",
                 data=json.dumps(
                     {
@@ -273,7 +319,8 @@ class FedAvgClient:
 
             if response.status_code == 204:
 
-                response = requests.get(
+                response = self.__measure_request_time(
+                    requests.get,
                     url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/active_tasks",
                 )
 
@@ -310,12 +357,13 @@ class FedAvgClient:
             elif task["action"] == "download":
                 # download key
                 state_dict = self.__download_key(phase=phase)
-                logging.info(f"Key downloaded for {self.client_name}: {state_dict}")
+                # logging.info(f"Key downloaded for {self.client_name}: {state_dict}")
                 # Add the downloaded keys to the existing ones
                 self.__add_keys(state_dict)
 
             sleep(1)  # Sleep for a while before checking again
 
+    @__measure_time
     def __phase_3_routine(self):
         """
         Phase 3: Final sum upload and download.
@@ -323,7 +371,8 @@ class FedAvgClient:
         phase = 3
 
         # Check if the client is the recipient of the final sum
-        response = requests.get(
+        response = self.__measure_request_time(
+            requests.get,
             url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/final/recipient",
         )
 
@@ -340,7 +389,8 @@ class FedAvgClient:
                 torch.save(self.state_dict, f)
             buffer.seek(0)
 
-            upload_response = requests.post(
+            upload_response = self.__measure_request_time(
+                requests.post,
                 url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/final/upload",
                 files={
                     "final_sum": (
@@ -362,7 +412,8 @@ class FedAvgClient:
 
         # Download the final sum
         while True:
-            response = requests.get(
+            response = self.__measure_request_time(
+                requests.get,
                 url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/final/download",
                 stream=True,
             )
@@ -373,9 +424,9 @@ class FedAvgClient:
                 with gzip.GzipFile(fileobj=buffer, mode="rb") as f:
                     final_state_dict = torch.load(f, map_location="cpu")
 
-                logging.info(
-                    f"Final sum downloaded for {self.client_name}: {final_state_dict}"
-                )
+                # logging.info(
+                #     f"Final sum downloaded for {self.client_name}: {final_state_dict}"
+                # )
 
                 # Update the local state_dict with the final sum
                 self.state_dict = final_state_dict
@@ -388,13 +439,15 @@ class FedAvgClient:
                     f"Failed to download final sum from key aggregation server: {response.text}"
                 )
 
+    @__measure_time
     def __key_aggregation_routine(self):
         logging.info("-- PHASE 1 --")
         self.__phase_1_routine()
 
         # Wait for all clients to finish phase 1
         while True:
-            response = requests.get(
+            response = self.__measure_request_time(
+                requests.get,
                 url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/1/active_tasks",
             )
             if response.status_code != 200:
@@ -419,6 +472,7 @@ class FedAvgClient:
         logging.info("-- PHASE 3 --")
         self.__phase_3_routine()
 
+    @__measure_time
     def __connect_to_key_aggregation_server(self):
 
         request_body = KeyClientRegistration(
@@ -427,7 +481,8 @@ class FedAvgClient:
             preshared_secret=self.preshared_secret,
         )
 
-        response = requests.post(
+        response = self.__measure_request_time(
+            requests.post,
             url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/register",
             data=json.dumps(request_body.dict()),
         )
