@@ -424,9 +424,7 @@ class FedAvgClient:
                 with gzip.GzipFile(fileobj=buffer, mode="rb") as f:
                     final_state_dict = torch.load(f, map_location="cpu")
 
-                # logging.info(
-                #     f"Final sum downloaded for {self.client_name}: {final_state_dict}"
-                # )
+                logging.info("Final sum downloaded")
 
                 # Update the local state_dict with the final sum
                 self.state_dict = final_state_dict
