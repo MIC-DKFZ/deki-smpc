@@ -116,10 +116,7 @@ class FedAvgClient:
     def __upload_key(self, state_dict: dict, phase: int):
 
         # 2. Serialize and compress
-        buffer = io.BytesIO()
-        with lz4.frame.open(buffer, mode="wb") as f:
-            torch.save(state_dict, f)
-        buffer.seek(0)
+        buffer = self.__serialize_and_compress(state_dict)
 
         response = self.__measure_request_time(
             lambda session, **kwargs: session.post(**kwargs),
@@ -133,6 +130,8 @@ class FedAvgClient:
             raise ConnectionError(
                 f"Failed to upload key to key aggregation server: {response.text}"
             )
+
+        logging.info(f"Key uploaded for {self.client_name}: {state_dict}")
 
     @__measure_time
     def __download_key(self, phase: int) -> dict:
@@ -149,9 +148,9 @@ class FedAvgClient:
             )
 
         # Decompress and load the state_dict
-        buffer = io.BytesIO(response.content)
-        with lz4.frame.open(buffer, mode="rb") as f:
-            state_dict = torch.load(f, map_location="cpu")
+        state_dict = self.__decompress_and_load(response.content)
+
+        logging.info(f"Key downloaded for {self.client_name}: {state_dict}")
 
         return state_dict
 
@@ -399,7 +398,6 @@ class FedAvgClient:
         """
         Phase 3: Final sum upload and download.
         """
-        phase = 3
 
         # Check if the client is the recipient of the final sum
         response = self.__measure_request_time(
@@ -414,11 +412,8 @@ class FedAvgClient:
 
         recipient_info = response.json()
         if recipient_info.get("recipient") == self.client_name:
-            # Upload the final sum
-            buffer = io.BytesIO()
-            with lz4.frame.open(buffer, mode="wb") as f:
-                torch.save(self.state_dict, f)
-            buffer.seek(0)
+            # Serialize and compress the state_dict before uploading
+            buffer = self.__serialize_and_compress(self.state_dict)
 
             upload_response = self.__measure_request_time(
                 lambda session, **kwargs: session.post(**kwargs),
@@ -450,15 +445,15 @@ class FedAvgClient:
             )
 
             if response.status_code == 200:
-                # Decompress and load the final state_dict
+                # Decompress and load the final state_dict after downloading
                 buffer = io.BytesIO(response.content)
-                with lz4.frame.open(buffer, mode="rb") as f:
-                    final_state_dict = torch.load(f, map_location="cpu")
+                self.state_dict = self.__decompress_and_load(buffer.getvalue())
 
                 logging.info("Final sum downloaded")
 
                 # Update the local state_dict with the final sum
-                self.state_dict = final_state_dict
+                # self.state_dict = final_state_dict
+                logging.info(self.state_dict)
                 break
 
             elif response.status_code == 404:
@@ -521,6 +516,27 @@ class FedAvgClient:
                 f"Failed to connect to key aggregation server: {response.text}"
             )
 
+    @__measure_time
+    def __serialize_and_compress(self, state_dict: dict) -> io.BytesIO:
+        """
+        Serialize and compress the state_dict.
+        """
+        buffer = io.BytesIO()
+        with lz4.frame.open(buffer, mode="wb") as f:
+            torch.save(state_dict, f)
+        buffer.seek(0)
+        return buffer
+
+    @__measure_time
+    def __decompress_and_load(self, compressed_data: bytes) -> dict:
+        """
+        Decompress and load the state_dict.
+        """
+        buffer = io.BytesIO(compressed_data)
+        with lz4.frame.open(buffer, mode="rb") as f:
+            state_dict = torch.load(f, map_location="cpu")
+        return state_dict
+
 
 if __name__ == "__main__":
     import argparse
@@ -539,7 +555,7 @@ if __name__ == "__main__":
         def forward(self, x):
             return self.linear(x)
 
-    model = resnet18()
+    model = LinearModel()
 
     # masked_dict = SecurityUtils.generate_secure_random_mask(model)
     # print(masked_dict)
