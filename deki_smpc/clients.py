@@ -1,4 +1,3 @@
-import gzip
 import io
 import json
 import logging
@@ -7,14 +6,15 @@ import time
 from hashlib import sha256
 from time import sleep
 
+import lz4.frame
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util import Retry
 import torch
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from models import CheckForTaskRequest, KeyClientRegistration
+from requests.adapters import HTTPAdapter
 from torch.nn import Module
 from torchvision.models import resnet18
+from urllib3.util import Retry
 from utils import SecurityUtils
 
 logging.basicConfig(level=logging.INFO)
@@ -117,7 +117,7 @@ class FedAvgClient:
 
         # 2. Serialize and compress
         buffer = io.BytesIO()
-        with gzip.GzipFile(fileobj=buffer, mode="wb") as f:
+        with lz4.frame.open(buffer, mode="wb") as f:
             torch.save(state_dict, f)
         buffer.seek(0)
 
@@ -150,7 +150,7 @@ class FedAvgClient:
 
         # Decompress and load the state_dict
         buffer = io.BytesIO(response.content)
-        with gzip.GzipFile(fileobj=buffer, mode="rb") as f:
+        with lz4.frame.open(buffer, mode="rb") as f:
             state_dict = torch.load(f, map_location="cpu")
 
         return state_dict
@@ -416,7 +416,7 @@ class FedAvgClient:
         if recipient_info.get("recipient") == self.client_name:
             # Upload the final sum
             buffer = io.BytesIO()
-            with gzip.GzipFile(fileobj=buffer, mode="wb") as f:
+            with lz4.frame.open(buffer, mode="wb") as f:
                 torch.save(self.state_dict, f)
             buffer.seek(0)
 
@@ -452,7 +452,7 @@ class FedAvgClient:
             if response.status_code == 200:
                 # Decompress and load the final state_dict
                 buffer = io.BytesIO(response.content)
-                with gzip.GzipFile(fileobj=buffer, mode="rb") as f:
+                with lz4.frame.open(buffer, mode="rb") as f:
                     final_state_dict = torch.load(f, map_location="cpu")
 
                 logging.info("Final sum downloaded")
