@@ -8,6 +8,8 @@ from hashlib import sha256
 from time import sleep
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 import torch
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from models import CheckForTaskRequest, KeyClientRegistration
@@ -59,6 +61,19 @@ class FedAvgClient:
         self.public_facing_ip = requests.get(
             "https://api.ipify.org/?format=json"
         ).json()["ip"]
+
+        # Initialize a requests Session with retries
+        self.session = requests.Session()
+        retries = Retry(
+            total=3,
+            backoff_factor=0.1,
+            status_forcelist=[502, 503, 504],
+            allowed_methods={"GET", "POST"},
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
         self.__connect_to_key_aggregation_server()
         self.current_fl_round = 0
         self.model = model.float() if model else None
@@ -92,7 +107,7 @@ class FedAvgClient:
         """
         url = kwargs.get("url", "Unknown URL")
         start_time = time.time()
-        response = request_func(*args, **kwargs)
+        response = request_func(self.session, *args, **kwargs)
         end_time = time.time()
         logging.info(f"Request to {url} took {end_time - start_time:.2f} seconds")
         return response
@@ -107,7 +122,7 @@ class FedAvgClient:
         buffer.seek(0)
 
         response = self.__measure_request_time(
-            requests.post,
+            lambda session, **kwargs: session.post(**kwargs),
             url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/upload",
             files={
                 "key": ("model.pt.gz", buffer, "application/octet-stream"),
@@ -122,7 +137,7 @@ class FedAvgClient:
     @__measure_time
     def __download_key(self, phase: int) -> dict:
         response = self.__measure_request_time(
-            requests.get,
+            lambda session, **kwargs: session.get(**kwargs),
             url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/download",
             json={"client_name": self.client_name},
             stream=True,
@@ -245,7 +260,7 @@ class FedAvgClient:
 
         while True:
             response = self.__measure_request_time(
-                requests.get,
+                lambda session, **kwargs: session.get(**kwargs),
                 url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/check_for_task",
                 data=json.dumps(
                     {
@@ -308,7 +323,7 @@ class FedAvgClient:
         phase = 2
 
         response = self.__measure_request_time(
-            requests.get,
+            lambda session, **kwargs: session.get(**kwargs),
             url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/tasks/participants",
         )
         if response.status_code != 200:
@@ -324,7 +339,7 @@ class FedAvgClient:
 
         while True:
             response = self.__measure_request_time(
-                requests.get,
+                lambda session, **kwargs: session.get(**kwargs),
                 url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/check_for_task",
                 data=json.dumps(
                     {
@@ -336,7 +351,7 @@ class FedAvgClient:
             if response.status_code == 204:
 
                 response = self.__measure_request_time(
-                    requests.get,
+                    lambda session, **kwargs: session.get(**kwargs),
                     url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/active_tasks",
                 )
 
@@ -388,7 +403,7 @@ class FedAvgClient:
 
         # Check if the client is the recipient of the final sum
         response = self.__measure_request_time(
-            requests.get,
+            lambda session, **kwargs: session.get(**kwargs),
             url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/final/recipient",
         )
 
@@ -406,7 +421,7 @@ class FedAvgClient:
             buffer.seek(0)
 
             upload_response = self.__measure_request_time(
-                requests.post,
+                lambda session, **kwargs: session.post(**kwargs),
                 url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/final/upload",
                 files={
                     "final_sum": (
@@ -429,7 +444,7 @@ class FedAvgClient:
         # Download the final sum
         while True:
             response = self.__measure_request_time(
-                requests.get,
+                lambda session, **kwargs: session.get(**kwargs),
                 url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/final/download",
                 stream=True,
             )
@@ -461,7 +476,7 @@ class FedAvgClient:
         # Wait for all clients to finish phase 1
         while True:
             response = self.__measure_request_time(
-                requests.get,
+                lambda session, **kwargs: session.get(**kwargs),
                 url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/1/active_tasks",
             )
             if response.status_code != 200:
@@ -496,7 +511,7 @@ class FedAvgClient:
         )
 
         response = self.__measure_request_time(
-            requests.post,
+            lambda session, **kwargs: session.post(**kwargs),
             url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/register",
             data=json.dumps(request_body.dict()),
         )
