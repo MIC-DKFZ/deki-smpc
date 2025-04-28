@@ -50,4 +50,9 @@ You focus on training great models.
 We handle secure aggregation.
 
 ## 📚 Documentation
+
 Coming soon! (Stay tuned.)
+
+## ⚠️ Work in Progress
+
+This is currently a work in progress to transfer the implementation used for the experiments in the paper into a clean and fully usable implementation.
