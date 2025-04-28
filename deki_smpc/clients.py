@@ -205,22 +205,7 @@ class FedAvgClient:
         Shield the state_dict by applying a random mask to each tensor.
         The mask is generated using the SecurityUtils class.
         """
-        # Convert state_dict to int32
-        int32_state_dict = self.__convert_state_dict_to_int32(state_dict)
-
-        if self.mask_key is None:
-            self.mask_key = SecurityUtils.generate_secure_random_mask(int32_state_dict)
-
-        # Apply the mask to the int32_state_dict
-        for key in int32_state_dict:
-            # Move tensors to GPU for masking
-            int32_state_dict[key] = int32_state_dict[key].to(self.device)
-            self.mask_key[key] = self.mask_key[key].to(self.device)
-            int32_state_dict[key] += self.mask_key[key]
-            # Offload tensors back to CPU
-            int32_state_dict[key] = int32_state_dict[key].cpu()
-
-        return int32_state_dict
+        return state_dict
 
     @__measure_time
     def __unshield_key(self, shielded_state_dict: dict):
@@ -228,29 +213,34 @@ class FedAvgClient:
         Unshield the state_dict by removing the random mask from each tensor.
         The mask is generated using the SecurityUtils class.
         """
-        if self.mask_key is None:
-            raise ValueError("Mask key is not set. Cannot unshield the state_dict.")
-
-        # Remove the mask from the shielded_state_dict
-        for key in shielded_state_dict:
-            # Move tensors to GPU for unmasking
-            shielded_state_dict[key] = shielded_state_dict[key].to(self.device)
-            self.mask_key[key] = self.mask_key[key].to(self.device)
-            shielded_state_dict[key] -= self.mask_key[key]
-            # Offload tensors back to CPU
-            shielded_state_dict[key] = shielded_state_dict[key].cpu()
-
-        # Convert back to float32 state_dict
-        return self.__convert_int32_to_state_dict(shielded_state_dict)
+        return shielded_state_dict
 
     @__measure_time
     def __phase_1_routine(self):
         # Phase 1: Group key generation
 
         phase = 1
+        first_senders = []
+        while len(first_senders) == 0:
+            response = self.__measure_request_time(
+                lambda session, **kwargs: session.get(**kwargs),
+                url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/first_senders",
+            )
+            if response.status_code != 200:
+                raise ConnectionError(
+                    f"Failed to connect to key aggregation server: {response.text}"
+                )
 
-        first_check = True
+            first_senders = response.json()["first_senders"]
+
+        logging.info(first_senders)
+        # Check if the client is the first in the group
         first_in_group = False
+        if self.client_name in first_senders:
+            first_in_group = True
+            logging.info(f"{self.client_name} is the first sender in the group.")
+        else:
+            logging.info(f"{self.client_name} is not the first sender in the group.")
 
         phase_1_tasks = {
             "upload": False,
@@ -268,8 +258,6 @@ class FedAvgClient:
                 ),
             )
             if response.status_code == 204:
-                if first_check:
-                    first_check = False
                 # No task available, continue polling
                 sleep(1)
                 continue
@@ -282,9 +270,6 @@ class FedAvgClient:
             logging.info(f"Task received for {self.client_name}: {task}")
 
             if task["action"] == "upload":
-                if first_check:
-                    first_in_group = True
-                    first_check = False
 
                 if first_in_group:
                     # Shield the state_dict before uploading
@@ -549,7 +534,7 @@ if __name__ == "__main__":
             super(LinearModel, self).__init__()
             self.linear = nn.Linear(in_features=1, out_features=10)
             with torch.no_grad():
-                self.linear.weight.fill_(1.0)
+                self.linear.weight.fill_(3.0)
                 self.linear.bias.fill_(0.0)
 
         def forward(self, x):
