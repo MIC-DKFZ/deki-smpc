@@ -22,7 +22,7 @@
 
 ## 🚀 Quick Usage Example
 
-First you need to startup a [deki-smpc](https://github.com/your-org/deki-smpc-server) aggregation server.
+First you need to startup a [deki-smpc](https://github.com/MIC-DKFZ/deki-smpc-server) aggregation server.
 
 ```python
 from deki_smpc import FedAvgClient
