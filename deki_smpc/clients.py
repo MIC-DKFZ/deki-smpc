@@ -62,7 +62,7 @@ class FedAvgClient:
         self.public_facing_ip = requests.get(
             "https://api.ipify.org/?format=json"
         ).json()["ip"]
-        self.url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/key-aggregation"
+        self.url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}"
 
         # Initialize a requests Session with retries
         self.session = requests.Session()
@@ -119,6 +119,59 @@ class FedAvgClient:
         return response
 
     @__measure_time
+    def __upload_model(self, state_dict: dict):
+
+        # Serialize and compress before uploading
+        buffer = self.__serialize_and_compress(state_dict)
+
+        upload_response = self.__measure_request_time(
+            lambda session, **kwargs: session.post(**kwargs),
+            url=f"{self.url}/secure-fl/upload",
+            files={
+                "model": (
+                    "model.pt.gz",
+                    buffer,
+                    "application/octet-stream",
+                ),
+                "client_name": (None, self.client_name),
+            },
+        )
+
+        if upload_response.status_code != 200:
+            raise ConnectionError(
+                f"Failed to upload model to fl server: {upload_response.text}"
+            )
+
+        logging.info(f"Model uploaded by {self.client_name}.")
+
+    @__measure_time
+    def __download_model(self) -> dict:
+        # Download the final sum
+        while True:
+            response = self.__measure_request_time(
+                lambda session, **kwargs: session.get(**kwargs),
+                url=f"{self.url}/secure-fl/download",
+                stream=True,
+            )
+
+            if response.status_code == 200:
+                # Decompress and load the final state_dict after downloading
+                buffer = io.BytesIO(response.content)
+                state_dict = self.__decompress_and_load(buffer.getvalue())
+
+                logging.info("Model downloaded")
+                break
+
+            elif response.status_code == 404:
+                sleep(1)
+            else:
+                raise ConnectionError(
+                    f"Failed to download model from fl server: {response.text}"
+                )
+
+        return state_dict
+
+    @__measure_time
     def __upload_key(self, state_dict: dict, phase: int):
 
         # 2. Serialize and compress
@@ -126,7 +179,7 @@ class FedAvgClient:
 
         response = self.__measure_request_time(
             lambda session, **kwargs: session.post(**kwargs),
-            url=f"{self.url}/aggregation/phase/{phase}/upload",
+            url=f"{self.url}/key-aggregation/aggregation/phase/{phase}/upload",
             files={
                 "key": ("model.pt.gz", buffer, "application/octet-stream"),
                 "client_name": (None, self.client_name),
@@ -143,7 +196,7 @@ class FedAvgClient:
     def __download_key(self, phase: int) -> dict:
         response = self.__measure_request_time(
             lambda session, **kwargs: session.get(**kwargs),
-            url=f"{self.url}/aggregation/phase/{phase}/download",
+            url=f"{self.url}/key-aggregation/aggregation/phase/{phase}/download",
             json={"client_name": self.client_name},
             stream=True,
         )
@@ -230,7 +283,7 @@ class FedAvgClient:
         while len(first_senders) == 0:
             response = self.__measure_request_time(
                 lambda session, **kwargs: session.get(**kwargs),
-                url=f"{self.url}/aggregation/phase/{phase}/first_senders",
+                url=f"{self.url}/key-aggregation/aggregation/phase/{phase}/first_senders",
             )
             if response.status_code != 200:
                 raise ConnectionError(
@@ -256,7 +309,7 @@ class FedAvgClient:
         while True:
             response = self.__measure_request_time(
                 lambda session, **kwargs: session.get(**kwargs),
-                url=f"{self.url}/aggregation/phase/{phase}/check_for_task",
+                url=f"{self.url}/key-aggregation/aggregation/phase/{phase}/check_for_task",
                 data=json.dumps(
                     {
                         "client_name": self.client_name,
@@ -310,7 +363,7 @@ class FedAvgClient:
 
         response = self.__measure_request_time(
             lambda session, **kwargs: session.get(**kwargs),
-            url=f"{self.url}/tasks/participants",
+            url=f"{self.url}/key-aggregation/tasks/participants",
         )
         if response.status_code != 200:
             raise ConnectionError(
@@ -326,7 +379,7 @@ class FedAvgClient:
         while True:
             response = self.__measure_request_time(
                 lambda session, **kwargs: session.get(**kwargs),
-                url=f"{self.url}/aggregation/phase/{phase}/check_for_task",
+                url=f"{self.url}/key-aggregation/aggregation/phase/{phase}/check_for_task",
                 data=json.dumps(
                     {
                         "client_name": self.client_name,
@@ -338,7 +391,7 @@ class FedAvgClient:
 
                 response = self.__measure_request_time(
                     lambda session, **kwargs: session.get(**kwargs),
-                    url=f"{self.url}/aggregation/phase/{phase}/active_tasks",
+                    url=f"{self.url}/key-aggregation/aggregation/phase/{phase}/active_tasks",
                 )
 
                 if response.status_code != 200:
@@ -389,7 +442,7 @@ class FedAvgClient:
         # Check if the client is the recipient of the final sum
         response = self.__measure_request_time(
             lambda session, **kwargs: session.get(**kwargs),
-            url=f"{self.url}/aggregation/final/recipient",
+            url=f"{self.url}/key-aggregation/aggregation/final/recipient",
         )
 
         if response.status_code != 200:
@@ -404,7 +457,7 @@ class FedAvgClient:
 
             upload_response = self.__measure_request_time(
                 lambda session, **kwargs: session.post(**kwargs),
-                url=f"{self.url}/aggregation/final/upload",
+                url=f"{self.url}/key-aggregation/aggregation/final/upload",
                 files={
                     "final_sum": (
                         "final_weights.pt.gz",
@@ -427,7 +480,7 @@ class FedAvgClient:
         while True:
             response = self.__measure_request_time(
                 lambda session, **kwargs: session.get(**kwargs),
-                url=f"{self.url}/aggregation/final/download",
+                url=f"{self.url}/key-aggregation/aggregation/final/download",
                 stream=True,
             )
 
@@ -455,7 +508,7 @@ class FedAvgClient:
         while True:
             response = self.__measure_request_time(
                 lambda session, **kwargs: session.get(**kwargs),
-                url=f"{self.url}/aggregation/phase/1/active_tasks",
+                url=f"{self.url}/key-aggregation/aggregation/phase/1/active_tasks",
             )
             if response.status_code != 200:
                 raise ConnectionError(
@@ -490,7 +543,7 @@ class FedAvgClient:
 
         response = self.__measure_request_time(
             lambda session, **kwargs: session.post(**kwargs),
-            url=f"{self.url}/register",
+            url=f"{self.url}/key-aggregation/register",
             data=json.dumps(request_body.dict()),
         )
 
@@ -526,7 +579,8 @@ class FedAvgClient:
 
     @__measure_time
     def aggregate(self) -> Module:
-        pass
+        self.__upload_model(self.state_dict)
+        logging.info(f"Downloaded model: {self.__download_model()}")
 
 
 if __name__ == "__main__":
