@@ -16,6 +16,7 @@ from torch.nn import Module
 from torchvision.models import resnet18
 from urllib3.util import Retry
 from utils import SecurityUtils
+from copy import deepcopy
 
 logging.basicConfig(level=logging.INFO)
 
@@ -61,6 +62,7 @@ class FedAvgClient:
         self.public_facing_ip = requests.get(
             "https://api.ipify.org/?format=json"
         ).json()["ip"]
+        self.url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/key-aggregation"
 
         # Initialize a requests Session with retries
         self.session = requests.Session()
@@ -78,11 +80,15 @@ class FedAvgClient:
         self.current_fl_round = 0
         self.model = model.float() if model else None
         self.state_dict = model.state_dict() if model else None
-        self.mask_key = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # start key aggregation routine
-        self.__key_aggregation_routine()
+        self.public_key = (
+            SecurityUtils.dummy_generate_secure_random_mask(self.state_dict)
+            if self.state_dict
+            else None
+        )
+        self.private_key = deepcopy(self.public_key) if self.public_key else None
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @staticmethod
     def __measure_time(func):
@@ -120,7 +126,7 @@ class FedAvgClient:
 
         response = self.__measure_request_time(
             lambda session, **kwargs: session.post(**kwargs),
-            url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/upload",
+            url=f"{self.url}/aggregation/phase/{phase}/upload",
             files={
                 "key": ("model.pt.gz", buffer, "application/octet-stream"),
                 "client_name": (None, self.client_name),
@@ -131,13 +137,13 @@ class FedAvgClient:
                 f"Failed to upload key to key aggregation server: {response.text}"
             )
 
-        logging.info(f"Key uploaded for {self.client_name}: {state_dict}")
+        logging.info(f"Key uploaded for {self.client_name}")
 
     @__measure_time
     def __download_key(self, phase: int) -> dict:
         response = self.__measure_request_time(
             lambda session, **kwargs: session.get(**kwargs),
-            url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/download",
+            url=f"{self.url}/aggregation/phase/{phase}/download",
             json={"client_name": self.client_name},
             stream=True,
         )
@@ -150,7 +156,7 @@ class FedAvgClient:
         # Decompress and load the state_dict
         state_dict = self.__decompress_and_load(response.content)
 
-        logging.info(f"Key downloaded for {self.client_name}: {state_dict}")
+        logging.info(f"Key downloaded for {self.client_name}")
 
         return state_dict
 
@@ -160,24 +166,24 @@ class FedAvgClient:
         Add the downloaded state_dict values to the existing state_dict values.
         This operation is performed element-wise for each tensor in the state_dict.
         """
-        if self.state_dict is None:
-            self.state_dict = downloaded_state_dict
+        if self.public_key is None:
+            self.public_key = downloaded_state_dict
         else:
-            for key in self.state_dict:
+            for key in self.public_key:
                 if key in downloaded_state_dict:
                     # Ensure both tensors have the same data type before addition
-                    if self.state_dict[key].dtype != downloaded_state_dict[key].dtype:
+                    if self.public_key[key].dtype != downloaded_state_dict[key].dtype:
                         downloaded_state_dict[key] = downloaded_state_dict[key].to(
-                            self.state_dict[key].dtype
+                            self.public_key[key].dtype
                         )
                     # Move tensors to GPU for addition
-                    self.state_dict[key] = self.state_dict[key].to(self.device)
+                    self.public_key[key] = self.public_key[key].to(self.device)
                     downloaded_state_dict[key] = downloaded_state_dict[key].to(
                         self.device
                     )
-                    self.state_dict[key] += downloaded_state_dict[key]
+                    self.public_key[key] += downloaded_state_dict[key]
                     # Offload tensors back to CPU
-                    self.state_dict[key] = self.state_dict[key].cpu()
+                    self.public_key[key] = self.public_key[key].cpu()
 
     @__measure_time
     def __convert_state_dict_to_int32(self, state_dict: dict) -> dict:
@@ -224,7 +230,7 @@ class FedAvgClient:
         while len(first_senders) == 0:
             response = self.__measure_request_time(
                 lambda session, **kwargs: session.get(**kwargs),
-                url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/first_senders",
+                url=f"{self.url}/aggregation/phase/{phase}/first_senders",
             )
             if response.status_code != 200:
                 raise ConnectionError(
@@ -250,7 +256,7 @@ class FedAvgClient:
         while True:
             response = self.__measure_request_time(
                 lambda session, **kwargs: session.get(**kwargs),
-                url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/check_for_task",
+                url=f"{self.url}/aggregation/phase/{phase}/check_for_task",
                 data=json.dumps(
                     {
                         "client_name": self.client_name,
@@ -273,22 +279,18 @@ class FedAvgClient:
 
                 if first_in_group:
                     # Shield the state_dict before uploading
-                    self.state_dict = self.__shield_key(self.state_dict)
+                    self.public_key = self.__shield_key(self.public_key)
                 # upload key
-                self.__upload_key(state_dict=self.state_dict, phase=phase)
+                self.__upload_key(state_dict=self.public_key, phase=phase)
                 # Mark the task as completed
                 phase_1_tasks["upload"] = True
 
             elif task["action"] == "download":
-                # download key
                 downloaded_state_dict = self.__download_key(phase=phase)
-                # logging.info(
-                #     f"Key downloaded for {self.client_name}: {downloaded_state_dict}"
-                # )
                 if first_in_group:
-                    self.state_dict = downloaded_state_dict
+                    self.public_key = downloaded_state_dict
                     # Unshield the state_dict after downloading
-                    self.state_dict = self.__unshield_key(self.state_dict)
+                    self.public_key = self.__unshield_key(self.public_key)
                 else:
                     # Add the downloaded keys to the existing ones
                     self.__add_keys(downloaded_state_dict)
@@ -308,7 +310,7 @@ class FedAvgClient:
 
         response = self.__measure_request_time(
             lambda session, **kwargs: session.get(**kwargs),
-            url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/tasks/participants",
+            url=f"{self.url}/tasks/participants",
         )
         if response.status_code != 200:
             raise ConnectionError(
@@ -324,7 +326,7 @@ class FedAvgClient:
         while True:
             response = self.__measure_request_time(
                 lambda session, **kwargs: session.get(**kwargs),
-                url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/check_for_task",
+                url=f"{self.url}/aggregation/phase/{phase}/check_for_task",
                 data=json.dumps(
                     {
                         "client_name": self.client_name,
@@ -336,7 +338,7 @@ class FedAvgClient:
 
                 response = self.__measure_request_time(
                     lambda session, **kwargs: session.get(**kwargs),
-                    url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/{phase}/active_tasks",
+                    url=f"{self.url}/aggregation/phase/{phase}/active_tasks",
                 )
 
                 if response.status_code != 200:
@@ -367,7 +369,7 @@ class FedAvgClient:
 
             if task["action"] == "upload":
                 # upload key
-                self.__upload_key(state_dict=self.state_dict, phase=phase)
+                self.__upload_key(state_dict=self.public_key, phase=phase)
 
             elif task["action"] == "download":
                 # download key
@@ -387,7 +389,7 @@ class FedAvgClient:
         # Check if the client is the recipient of the final sum
         response = self.__measure_request_time(
             lambda session, **kwargs: session.get(**kwargs),
-            url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/final/recipient",
+            url=f"{self.url}/aggregation/final/recipient",
         )
 
         if response.status_code != 200:
@@ -398,11 +400,11 @@ class FedAvgClient:
         recipient_info = response.json()
         if recipient_info.get("recipient") == self.client_name:
             # Serialize and compress the state_dict before uploading
-            buffer = self.__serialize_and_compress(self.state_dict)
+            buffer = self.__serialize_and_compress(self.public_key)
 
             upload_response = self.__measure_request_time(
                 lambda session, **kwargs: session.post(**kwargs),
-                url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/final/upload",
+                url=f"{self.url}/aggregation/final/upload",
                 files={
                     "final_sum": (
                         "final_weights.pt.gz",
@@ -425,20 +427,16 @@ class FedAvgClient:
         while True:
             response = self.__measure_request_time(
                 lambda session, **kwargs: session.get(**kwargs),
-                url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/final/download",
+                url=f"{self.url}/aggregation/final/download",
                 stream=True,
             )
 
             if response.status_code == 200:
                 # Decompress and load the final state_dict after downloading
                 buffer = io.BytesIO(response.content)
-                self.state_dict = self.__decompress_and_load(buffer.getvalue())
+                self.public_key = self.__decompress_and_load(buffer.getvalue())
 
                 logging.info("Final sum downloaded")
-
-                # Update the local state_dict with the final sum
-                # self.state_dict = final_state_dict
-                logging.info(self.state_dict)
                 break
 
             elif response.status_code == 404:
@@ -457,7 +455,7 @@ class FedAvgClient:
         while True:
             response = self.__measure_request_time(
                 lambda session, **kwargs: session.get(**kwargs),
-                url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/aggregation/phase/1/active_tasks",
+                url=f"{self.url}/aggregation/phase/1/active_tasks",
             )
             if response.status_code != 200:
                 raise ConnectionError(
@@ -492,7 +490,7 @@ class FedAvgClient:
 
         response = self.__measure_request_time(
             lambda session, **kwargs: session.post(**kwargs),
-            url=f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/register",
+            url=f"{self.url}/register",
             data=json.dumps(request_body.dict()),
         )
 
@@ -521,6 +519,14 @@ class FedAvgClient:
         with lz4.frame.open(buffer, mode="rb") as f:
             state_dict = torch.load(f, map_location="cpu")
         return state_dict
+
+    @__measure_time
+    def prepare_transfer(self):
+        self.__key_aggregation_routine()
+
+    @__measure_time
+    def aggregate(self) -> Module:
+        pass
 
 
 if __name__ == "__main__":
@@ -566,3 +572,7 @@ if __name__ == "__main__":
         client_name=client_name,  # For better logging at the server. MUST BE UNIQUE ACROSS ALL CLIENTS
         model=model,
     )
+
+    client.prepare_transfer()
+
+    updated_model = client.aggregate()
