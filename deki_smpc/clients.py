@@ -1,7 +1,6 @@
 import io
 import json
 import logging
-import threading
 import time
 from copy import deepcopy
 from hashlib import sha256
@@ -10,11 +9,9 @@ from time import sleep
 import lz4.frame
 import requests
 import torch
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from models import CheckForTaskRequest, KeyClientRegistration
+from models import KeyClientRegistration
 from requests.adapters import HTTPAdapter
 from torch.nn import Module
-from torchvision.models import resnet18
 from urllib3.util import Retry
 from utils import SecurityUtils
 
