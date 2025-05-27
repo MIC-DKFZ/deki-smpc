@@ -3,6 +3,7 @@ import json
 import logging
 import threading
 import time
+from copy import deepcopy
 from hashlib import sha256
 from time import sleep
 
@@ -16,7 +17,6 @@ from torch.nn import Module
 from torchvision.models import resnet18
 from urllib3.util import Retry
 from utils import SecurityUtils
-from copy import deepcopy
 
 logging.basicConfig(level=logging.INFO)
 
@@ -80,6 +80,7 @@ class FedAvgClient:
         self.current_fl_round = 0
         self.model = model.float() if model else None
         self.state_dict = model.state_dict() if model else None
+        self.aggregated_state_dict = None
 
         self.public_key = (
             SecurityUtils.dummy_generate_secure_random_mask(self.state_dict)
@@ -580,7 +581,14 @@ class FedAvgClient:
     @__measure_time
     def aggregate(self) -> Module:
         self.__upload_model(self.state_dict)
-        logging.info(f"Downloaded model: {self.__download_model()}")
+
+        model_data = self.__download_model()
+
+        for k in model_data.keys():
+            model_data[k] = model_data[k] / self.num_clients
+
+        self.aggregated_state_dict = model_data
+        return self.aggregated_state_dict
 
 
 if __name__ == "__main__":
@@ -621,7 +629,7 @@ if __name__ == "__main__":
         key_aggregation_server_port=8080,
         fl_aggregation_server_ip="127.0.0.1",
         fl_aggregation_server_port=8081,
-        num_clients=3,
+        num_clients=10,
         preshared_secret="my_secure_presHared_secret_123!",
         client_name=client_name,  # For better logging at the server. MUST BE UNIQUE ACROSS ALL CLIENTS
         model=model,
