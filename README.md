@@ -7,7 +7,7 @@
 - **Minimal Invasion**: No need to refactor your training loop! Just plug **deki-smpc** into your existing code.
 - **Dual-Server Architecture**:
   - **Key Exchange Server**: Fast, RESTful key generation (built with FastAPI).
-  - **FL Aggregation Server**: Secure model aggregation (leveraging Flower + PyTorch-based SMPC).
+  - **FL Aggregation Server**: Secure model aggregation (leveraging FastAPI (used to be Flower) + PyTorch-based SMPC).
 - **Efficient Key Generation**: Key generation happens **in parallel** with model training, avoiding extra overhead.
 - **Security First**: Uses a preshared secret and SMPC protocols to guarantee data privacy across participants.
 - **Flexible and Lightweight**: Focused, extensible, and easy to integrate.
