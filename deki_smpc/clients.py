@@ -13,7 +13,7 @@ from models import KeyClientRegistration
 from requests.adapters import HTTPAdapter
 from torch.nn import Module
 from urllib3.util import Retry
-from utils import SecurityUtils
+from utils import SecurityUtils, FixedPointConverter
 
 logging.basicConfig(level=logging.INFO)
 
@@ -85,8 +85,13 @@ class FedAvgClient:
             else None
         )
         self.private_key = deepcopy(self.public_key) if self.public_key else None
+        logging.info(
+            f"Client {self.client_name} initialized with private key: {self.private_key}"
+        )
+        self.secure_random_mask = None
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.fpe = FixedPointConverter(device=self.device)
 
     @staticmethod
     def __measure_time(func):
@@ -217,15 +222,21 @@ class FedAvgClient:
         Add the downloaded state_dict values to the existing state_dict values.
         This operation is performed element-wise for each tensor in the state_dict.
         """
+        logging.info(f"self.public_key: {self.public_key}")
+        logging.info(f"downloaded_state_dict: {downloaded_state_dict}")
         if self.public_key is None:
             self.public_key = downloaded_state_dict
         else:
             for key in self.public_key:
                 if key in downloaded_state_dict:
-                    # Ensure both tensors have the same data type before addition
-                    if self.public_key[key].dtype != downloaded_state_dict[key].dtype:
-                        downloaded_state_dict[key] = downloaded_state_dict[key].to(
-                            self.public_key[key].dtype
+                    if FixedPointConverter.is_float_tensor(self.public_key[key]):
+                        # Convert float tensors to int64 for addition
+                        self.public_key[key] = self.fpe.encode(self.public_key[key])
+
+                    if FixedPointConverter.is_float_tensor(downloaded_state_dict[key]):
+                        # Convert float tensors to int64 for addition
+                        downloaded_state_dict[key] = self.fpe.encode(
+                            downloaded_state_dict[key]
                         )
                     # Move tensors to GPU for addition
                     self.public_key[key] = self.public_key[key].to(self.device)
@@ -235,42 +246,67 @@ class FedAvgClient:
                     self.public_key[key] += downloaded_state_dict[key]
                     # Offload tensors back to CPU
                     self.public_key[key] = self.public_key[key].cpu()
+        logging.info(f"Updated public key: {self.public_key}")
 
     @__measure_time
-    def __convert_state_dict_to_int32(self, state_dict: dict) -> dict:
-        """
-        Convert the state_dict tensors to 32-bit signed integers with minimal precision loss.
-        """
-        int32_state_dict = {}
-        for key, tensor in state_dict.items():
-            int32_state_dict[key] = (tensor * (2**16)).to(torch.int32)
-        return int32_state_dict
+    def __convert_state_dict_to_int(self, state_dict: dict) -> dict:
+        for key, _ in state_dict.items():
+            state_dict[key] = self.fpe.encode(state_dict[key])
 
-    @__measure_time
-    def __convert_int32_to_state_dict(self, int32_state_dict: dict) -> dict:
-        """
-        Convert the 32-bit signed integer state_dict back to 32-bit float tensors.
-        """
-        state_dict = {}
-        for key, tensor in int32_state_dict.items():
-            state_dict[key] = (tensor.to(torch.float32)) / (2**16)
         return state_dict
 
     @__measure_time
-    def __shield_key(self, state_dict: dict):
+    def __convert_int_to_state_dict(self, int_state_dict: dict) -> dict:
+        for key, val in int_state_dict.items():
+            # Convert JSON-loaded lists or scalars into a LongTensor on the correct device
+            if not torch.is_tensor(val):
+                int_state_dict[key] = torch.tensor(
+                    val, dtype=torch.long, device=self.device
+                )
+            else:
+                int_state_dict[key] = val.to(dtype=torch.long, device=self.device)
+            # Decode the integer tensor back to the original state tensor
+            int_state_dict[key] = self.fpe.decode(int_state_dict[key])
+
+        return int_state_dict
+
+    @__measure_time
+    def __shield_key(self, state_dict: dict, secure_random_mask: dict = None):
         """
         Shield the state_dict by applying a random mask to each tensor.
         The mask is generated using the SecurityUtils class.
         """
-        return state_dict
+        state_dict = self.__convert_state_dict_to_int(state_dict)
+
+        if secure_random_mask is None:
+            secure_random_mask = SecurityUtils.generate_secure_random_mask(state_dict)
+
+        for key, _ in state_dict.items():
+            state_dict[key] = (state_dict[key] + secure_random_mask[key]).to(
+                self.device
+            )
+
+        return state_dict, secure_random_mask
 
     @__measure_time
-    def __unshield_key(self, shielded_state_dict: dict):
+    def __unshield_key(
+        self, shielded_state_dict: dict, secure_random_mask: dict = None
+    ):
         """
         Unshield the state_dict by removing the random mask from each tensor.
         The mask is generated using the SecurityUtils class.
         """
-        return shielded_state_dict
+
+        for key, _ in shielded_state_dict.items():
+            # Ensure both tensors are on the same device
+            shielded_state_dict[key] = shielded_state_dict[key].to(self.device)
+            secure_random_mask[key] = secure_random_mask[key].to(self.device)
+
+            shielded_state_dict[key] = (
+                shielded_state_dict[key] - secure_random_mask[key]
+            )
+
+        return self.__convert_int_to_state_dict(shielded_state_dict)
 
     @__measure_time
     def __phase_1_routine(self):
@@ -330,7 +366,9 @@ class FedAvgClient:
 
                 if first_in_group:
                     # Shield the state_dict before uploading
-                    self.public_key = self.__shield_key(self.public_key)
+                    self.public_key, self.secure_random_mask = self.__shield_key(
+                        self.public_key
+                    )
                 # upload key
                 self.__upload_key(state_dict=self.public_key, phase=phase)
                 # Mark the task as completed
@@ -341,7 +379,9 @@ class FedAvgClient:
                 if first_in_group:
                     self.public_key = downloaded_state_dict
                     # Unshield the state_dict after downloading
-                    self.public_key = self.__unshield_key(self.public_key)
+                    self.public_key = self.__unshield_key(
+                        self.public_key, self.secure_random_mask
+                    )
                 else:
                     # Add the downloaded keys to the existing ones
                     self.__add_keys(downloaded_state_dict)
@@ -486,6 +526,9 @@ class FedAvgClient:
                 # Decompress and load the final state_dict after downloading
                 buffer = io.BytesIO(response.content)
                 self.public_key = self.__decompress_and_load(buffer.getvalue())
+                logging.info(
+                    f"Final sum downloaded for {self.client_name}: {self.public_key}"
+                )
 
                 logging.info("Final sum downloaded")
                 break
@@ -577,9 +620,14 @@ class FedAvgClient:
 
     @__measure_time
     def aggregate(self) -> Module:
-        self.__upload_model(self.state_dict)
 
-        model_data = self.__download_model()
+        self.prepare_transfer()
+
+        shielded_model, _ = self.__shield_key(self.state_dict, self.private_key)
+
+        self.__upload_model(shielded_model)
+
+        model_data = self.__unshield_key(self.__download_model(), self.public_key)
 
         for k in model_data.keys():
             model_data[k] = model_data[k] / self.num_clients
@@ -599,16 +647,13 @@ if __name__ == "__main__":
             super(LinearModel, self).__init__()
             self.linear = nn.Linear(in_features=1, out_features=10)
             with torch.no_grad():
-                self.linear.weight.fill_(3.0)
-                self.linear.bias.fill_(0.0)
+                self.linear.weight.fill_(3.123134)
+                self.linear.bias.fill_(1.123123)
 
         def forward(self, x):
             return self.linear(x)
 
     model = LinearModel()
-
-    # masked_dict = SecurityUtils.generate_secure_random_mask(model)
-    # print(masked_dict)
 
     parser = argparse.ArgumentParser(description="Federated Learning Client")
     parser.add_argument(
@@ -626,12 +671,12 @@ if __name__ == "__main__":
         key_aggregation_server_port=8080,
         fl_aggregation_server_ip="127.0.0.1",
         fl_aggregation_server_port=8081,
-        num_clients=10,
+        num_clients=4,
         preshared_secret="my_secure_presHared_secret_123!",
         client_name=client_name,  # For better logging at the server. MUST BE UNIQUE ACROSS ALL CLIENTS
         model=model,
     )
 
-    client.prepare_transfer()
-
     updated_model = client.aggregate()
+
+    logging.info(f"Updated model state_dict: {updated_model}")

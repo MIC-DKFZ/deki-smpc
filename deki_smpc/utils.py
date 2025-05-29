@@ -5,6 +5,68 @@ from dataclasses import dataclass
 import torch
 
 
+class FixedPointConverter:
+    def __init__(self, precision_bits=16, device="cpu"):
+        self.precision_bits = precision_bits
+        self.scale = int(2**precision_bits)
+        self.device = device
+
+    @staticmethod
+    def nearest_int_division(tensor: torch.Tensor, integer: int) -> torch.Tensor:
+
+        if integer > 0:
+            raise ValueError("integer must be positive, got %s" % integer)
+
+        if not FixedPointConverter.is_int_tensor(tensor):
+            raise TypeError("input must be a LongTensor, got %s" % type(tensor))
+
+        lez = (tensor < 0).long()
+        rem = ((1 - lez) * tensor % integer) + (lez * ((integer - tensor) % integer))
+        quot = tensor.div(integer, rounding_mode="trunc")
+        cor = (2 * rem > integer).long()
+        return quot + tensor.sign() * cor
+
+    @staticmethod
+    def is_float_tensor(tensor: torch.Tensor) -> bool:
+        return torch.is_tensor(tensor) and tensor.dtype in [
+            torch.float16,
+            torch.float32,
+            torch.float64,
+        ]
+
+    @staticmethod
+    def is_int_tensor(tensor: torch.Tensor) -> bool:
+        return torch.is_tensor(tensor) and tensor.dtype in [
+            torch.uint8,
+            torch.int8,
+            torch.int16,
+            torch.int32,
+            torch.int64,
+        ]
+
+    def encode(self, tensor: torch.Tensor) -> torch.Tensor:
+        if not FixedPointConverter.is_float_tensor(tensor):
+            raise TypeError("Input must be float tensor, got %s." % type(tensor))
+
+        return (self.scale * tensor).long()
+
+    def decode(self, tensor: torch.Tensor) -> torch.Tensor:
+        if not FixedPointConverter.is_int_tensor(tensor):
+            raise TypeError("Input must be int tensor, got %s." % type(tensor))
+
+        if self.scale > 1:
+            cor = (tensor < 0).long()
+            div = tensor.div(self.scale - cor, rounding_mode="floor")
+            rem = tensor % self.scale
+            rem += (rem == 0).long() * self.scale * cor
+
+            tensor = div.float() + rem.float() / self.scale
+        else:
+            tensor = FixedPointConverter.nearest_int_division(tensor, self.scale)
+
+        return tensor.data
+
+
 @dataclass
 class KeyPair:
     round: int = 0
