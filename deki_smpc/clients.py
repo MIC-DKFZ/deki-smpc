@@ -9,13 +9,12 @@ from time import sleep
 import lz4.frame
 import requests
 import torch
-from models import KeyClientRegistration
 from requests.adapters import HTTPAdapter
 from torch.nn import Module
 from urllib3.util import Retry
-from utils import FixedPointConverter, SecurityUtils
 
-logging.basicConfig(level=logging.INFO)
+from .models import KeyClientRegistration
+from .utils import FixedPointConverter, SecurityUtils
 
 
 class FedAvgClient:
@@ -30,6 +29,7 @@ class FedAvgClient:
         preshared_secret: str = None,
         client_name: str = None,
         model: Module = None,
+        logging_level: int = logging.INFO,
     ):
         assert num_clients is not None, "Number of clients must be provided"
         assert num_clients >= 3, "Number of clients must be at least 3"
@@ -48,6 +48,8 @@ class FedAvgClient:
         assert any(
             not char.isalnum() for char in preshared_secret
         ), "Preshared secret must contain at least one special character"
+
+        logging.basicConfig(level=logging_level)
 
         self.key_aggregation_server_ip = key_aggregation_server_ip
         self.key_aggregation_server_port = key_aggregation_server_port
@@ -634,49 +636,3 @@ class FedAvgClient:
 
         self.aggregated_state_dict = model_data
         return self.aggregated_state_dict
-
-
-if __name__ == "__main__":
-    import argparse
-
-    import torch
-    import torch.nn as nn
-
-    class LinearModel(nn.Module):
-        def __init__(self):
-            super(LinearModel, self).__init__()
-            self.linear = nn.Linear(in_features=1, out_features=10)
-            with torch.no_grad():
-                self.linear.weight.fill_(3.123134)
-                self.linear.bias.fill_(1.123123)
-
-        def forward(self, x):
-            return self.linear(x)
-
-    model = LinearModel()
-
-    parser = argparse.ArgumentParser(description="Federated Learning Client")
-    parser.add_argument(
-        # client
-        "--client_name",
-        type=str,
-        default="client_20",
-        help="Name of the client",
-    )
-
-    client_name = parser.parse_args().client_name
-
-    client = FedAvgClient(
-        key_aggregation_server_ip="127.0.0.1",
-        key_aggregation_server_port=8080,
-        fl_aggregation_server_ip="127.0.0.1",
-        fl_aggregation_server_port=8081,
-        num_clients=4,
-        preshared_secret="my_secure_presHared_secret_123!",
-        client_name=client_name,  # For better logging at the server. MUST BE UNIQUE ACROSS ALL CLIENTS
-        model=model,
-    )
-
-    updated_model = client.aggregate()
-
-    logging.info(f"Updated model state_dict: {updated_model}")

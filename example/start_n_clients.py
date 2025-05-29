@@ -5,7 +5,7 @@ import sys
 def start_clients(n):
     for i in range(n):
         client_name = f"client_{i}"
-        command = f"{sys.executable} ./deki_smpc/clients.py --client_name {client_name}"
+        command = f"{sys.executable} ./test_deki.py --client_name {client_name}"
         print(f"Starting {client_name} in a new terminal...")
 
         # Launch in a new gnome-terminal window, keeping it open after execution
