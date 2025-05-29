@@ -13,7 +13,7 @@ from models import KeyClientRegistration
 from requests.adapters import HTTPAdapter
 from torch.nn import Module
 from urllib3.util import Retry
-from utils import SecurityUtils, FixedPointConverter
+from utils import FixedPointConverter, SecurityUtils
 
 logging.basicConfig(level=logging.INFO)
 
