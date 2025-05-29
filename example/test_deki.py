@@ -32,10 +32,8 @@ parser.add_argument(
 client_name = parser.parse_args().client_name
 
 client = FedAvgClient(
-    key_aggregation_server_ip="127.0.0.1",
-    key_aggregation_server_port=8080,
-    fl_aggregation_server_ip="127.0.0.1",
-    fl_aggregation_server_port=8081,
+    aggregation_server_ip="127.0.0.1",
+    aggregation_server_port=8080,
     num_clients=4,
     preshared_secret="my_secure_presHared_secret_123!",
     client_name=client_name,  # For better logging at the server. MUST BE UNIQUE ACROSS ALL CLIENTS

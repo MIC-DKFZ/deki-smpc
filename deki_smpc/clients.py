@@ -21,10 +21,8 @@ class FedAvgClient:
 
     def __init__(
         self,
-        key_aggregation_server_ip: str,
-        key_aggregation_server_port: int,
-        fl_aggregation_server_ip: str,
-        fl_aggregation_server_port: int,
+        aggregation_server_ip: str,
+        aggregation_server_port: int,
         num_clients: int = None,
         preshared_secret: str = None,
         client_name: str = None,
@@ -51,10 +49,8 @@ class FedAvgClient:
 
         logging.basicConfig(level=logging_level)
 
-        self.key_aggregation_server_ip = key_aggregation_server_ip
-        self.key_aggregation_server_port = key_aggregation_server_port
-        self.fl_aggregation_server_ip = fl_aggregation_server_ip
-        self.fl_aggregation_server_port = fl_aggregation_server_port
+        self.key_aggregation_server_ip = aggregation_server_ip
+        self.key_aggregation_server_port = aggregation_server_port
         self.num_clients = num_clients
         self.preshared_secret = sha256(preshared_secret.encode()).hexdigest()
         self.client_name = client_name
