@@ -627,6 +627,20 @@ class FedAvgClient:
 
         model_data = self.__unshield_key(self.__download_model(), self.public_key)
 
+        response = self.__measure_request_time(
+            lambda session, **kwargs: session.post(**kwargs),
+            url=f"{self.url}/key-aggregation/aggregation/finished",
+            data=json.dumps(
+                {
+                    "client_name": self.client_name,
+                }
+            ),
+        )
+        if response.status_code != 200:
+            raise ConnectionError(
+                f"Failed to notify server of completion: {response.text}"
+            )
+
         for k in model_data.keys():
             model_data[k] = model_data[k] / self.num_clients
 
