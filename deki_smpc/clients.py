@@ -27,11 +27,12 @@ class FedAvgClient:
         preshared_secret: str = None,
         client_name: str = None,
         model: Module = None,
+        ignore_model_keys: list = [],
         logging_level: int = logging.INFO,
     ):
         assert num_clients is not None, "Number of clients must be provided"
         assert num_clients >= 3, "Number of clients must be at least 3"
-
+        assert model is not None, "Torch model must be provided"
         assert preshared_secret is not None, "Preshared secret must be provided"
         # Validate that preshared secret is at least 16 characters long and contains at least one number, one uppercase letter, and one special character
         assert (
@@ -46,7 +47,6 @@ class FedAvgClient:
         assert any(
             not char.isalnum() for char in preshared_secret
         ), "Preshared secret must contain at least one special character"
-
         logging.basicConfig(level=logging_level)
 
         self.key_aggregation_server_ip = aggregation_server_ip
@@ -75,17 +75,30 @@ class FedAvgClient:
         self.current_fl_round = 0
         self.model = model.float() if model else None
         self.state_dict = model.state_dict() if model else None
-        self.aggregated_state_dict = None
+        self.ignore_model_keys = ignore_model_keys
 
+        # Check for int tensors in the state_dict (e.g. num batches tracked)
+        if self.state_dict is not None:
+            if len(self.ignore_model_keys) == 0:
+                for key, _ in self.state_dict.items():
+                    if (
+                        self.state_dict[key].dtype == torch.int64
+                        or self.state_dict[key].dtype == torch.int32
+                        or self.state_dict[key].dtype == torch.int16
+                        or self.state_dict[key].dtype == torch.int8
+                    ):
+                        self.ignore_model_keys.append(key)
+
+        if len(self.ignore_model_keys) > 0:
+            logging.info(f"Ignoring model keys: {self.ignore_model_keys}")
+
+        self.aggregated_state_dict = None
         self.public_key = (
             SecurityUtils.dummy_generate_secure_random_mask(self.state_dict)
             if self.state_dict
             else None
         )
         self.private_key = deepcopy(self.public_key) if self.public_key else None
-        logging.info(
-            f"Client {self.client_name} initialized with private key: {self.private_key}"
-        )
         self.secure_random_mask = None
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -220,8 +233,6 @@ class FedAvgClient:
         Add the downloaded state_dict values to the existing state_dict values.
         This operation is performed element-wise for each tensor in the state_dict.
         """
-        logging.info(f"self.public_key: {self.public_key}")
-        logging.info(f"downloaded_state_dict: {downloaded_state_dict}")
         if self.public_key is None:
             self.public_key = downloaded_state_dict
         else:
@@ -244,18 +255,23 @@ class FedAvgClient:
                     self.public_key[key] += downloaded_state_dict[key]
                     # Offload tensors back to CPU
                     self.public_key[key] = self.public_key[key].cpu()
-        logging.info(f"Updated public key: {self.public_key}")
 
     @__measure_time
     def __convert_state_dict_to_int(self, state_dict: dict) -> dict:
-        for key, _ in state_dict.items():
-            state_dict[key] = self.fpe.encode(state_dict[key])
+        for key, val in state_dict.items():
+            if key in self.ignore_model_keys:
+                state_dict[key] = val
+                continue
+            state_dict[key] = self.fpe.encode(val)
 
         return state_dict
 
     @__measure_time
     def __convert_int_to_state_dict(self, int_state_dict: dict) -> dict:
         for key, val in int_state_dict.items():
+            if key in self.ignore_model_keys:
+                int_state_dict[key] = val
+                continue
             # Convert JSON-loaded lists or scalars into a LongTensor on the correct device
             if not torch.is_tensor(val):
                 int_state_dict[key] = torch.tensor(
@@ -463,7 +479,6 @@ class FedAvgClient:
             elif task["action"] == "download":
                 # download key
                 state_dict = self.__download_key(phase=phase)
-                # logging.info(f"Key downloaded for {self.client_name}: {state_dict}")
                 # Add the downloaded keys to the existing ones
                 self.__add_keys(state_dict)
 
@@ -525,10 +540,8 @@ class FedAvgClient:
                 buffer = io.BytesIO(response.content)
                 self.public_key = self.__decompress_and_load(buffer.getvalue())
                 logging.info(
-                    f"Final sum downloaded for {self.client_name}: {self.public_key}"
+                    f"Final sum downloaded for {self.client_name}"
                 )
-
-                logging.info("Final sum downloaded")
                 break
 
             elif response.status_code == 404:
