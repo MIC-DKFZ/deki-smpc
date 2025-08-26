@@ -1,16 +1,21 @@
 import io
 import json
 import logging
+import os
+import sys
+import tempfile
 import time
 from copy import deepcopy
 from hashlib import sha256
 from time import sleep
 
+import httpx
 import lz4.frame
 import requests
 import torch
 from requests.adapters import HTTPAdapter
 from torch.nn import Module
+from tqdm import tqdm
 from urllib3.util import Retry
 
 from .models import KeyClientRegistration
@@ -103,6 +108,7 @@ class FedAvgClient:
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.fpe = FixedPointConverter(device=self.device)
+        self.chunk_size = 1024 * 1024  # 1 MB
 
     @staticmethod
     def __measure_time(func):
@@ -120,6 +126,25 @@ class FedAvgClient:
             return result
 
         return wrapper
+
+    def _iter_bytes(self, b: bytes, pbar: tqdm):
+        mv = memoryview(b)
+        total = len(b)
+        i = 0
+        while i < total:
+            j = i + self.chunk_size
+            chunk = mv[i:j]
+            pbar.update(len(chunk))
+            yield chunk
+            i = j
+
+    def _stream_upload(self, url: str, headers: dict, content_iterable):
+        # httpx >= 0.28 streaming upload path
+        with httpx.Client(timeout=None) as client:
+            with client.stream(
+                "PUT", url, headers=headers, content=content_iterable
+            ) as resp:
+                resp.raise_for_status()
 
     def __measure_request_time(self, request_func, *args, **kwargs):
         """
@@ -188,40 +213,71 @@ class FedAvgClient:
     @__measure_time
     def __upload_key(self, state_dict: dict, phase: int):
 
-        # 2. Serialize and compress
-        buffer = self.__serialize_and_compress(state_dict)
+        bio = io.BytesIO()
+        torch.save(state_dict, bio, _use_new_zipfile_serialization=True)
+        data = bio.getvalue()
 
-        response = self.__measure_request_time(
-            lambda session, **kwargs: session.post(**kwargs),
-            url=f"{self.url}/key-aggregation/aggregation/phase/{phase}/upload",
-            files={
-                "key": ("model.pt.gz", buffer, "application/octet-stream"),
-                "client_name": (None, self.client_name),
-            },
+        url = f"{self.url}/key-aggregation/aggregation/upload"
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "X-Filename": f"{phase}_{self.client_name}_state_dict.pth",
+            "X-Client-Name": self.client_name,
+            "X-Phase": str(phase),
+        }
+        with tqdm(
+            total=len(data),
+            unit="B",
+            unit_scale=True,
+            desc=f"Uploading: {phase}_{self.client_name}_state_dict.pth",
+            ascii=True,
+        ) as pbar:
+            self._stream_upload(url, headers, self._iter_bytes(data, pbar))
+        logging.info(
+            f"Uploaded id='{phase}_{self.client_name}_state_dict.pth' as {headers['X-Filename']} ({len(data)} bytes)."
         )
-        if response.status_code != 200:
-            raise ConnectionError(
-                f"Failed to upload key to key aggregation server: {response.text}"
-            )
-
-        logging.info(f"Key uploaded for {self.client_name}")
 
     @__measure_time
     def __download_key(self, phase: int) -> dict:
-        response = self.__measure_request_time(
-            lambda session, **kwargs: session.get(**kwargs),
-            url=f"{self.url}/key-aggregation/aggregation/phase/{phase}/download",
-            json={"client_name": self.client_name},
-            stream=True,
-        )
-
-        if response.status_code != 200:
-            raise ConnectionError(
-                f"Failed to download key from key aggregation server: {response.text}"
+        headers = {
+            "X-Client-Name": self.client_name,
+            "X-Phase": str(phase),
+        }
+        url = f"{self.url}/key-aggregation/aggregation/download"
+        with tempfile.TemporaryDirectory(prefix=f"{phase}") as tmpdir:
+            out_path = os.path.join(
+                tmpdir, f"{phase}_{self.client_name}_state_dict.pth"
             )
-
-        # Decompress and load the state_dict
-        state_dict = self.__decompress_and_load(response.content)
+            with httpx.Client(timeout=None) as client:
+                with client.stream("GET", url, headers=headers) as resp:
+                    if resp.status_code == 404:
+                        logging.error(
+                            f"No artifact for id='{phase}_{self.client_name}_state_dict.pth'."
+                        )
+                        sys.exit(1)
+                    resp.raise_for_status()
+                    total = int(resp.headers.get("content-length") or 0)
+                    with open(out_path, "wb") as f, tqdm(
+                        total=total if total > 0 else None,
+                        unit="B",
+                        unit_scale=True,
+                        desc=f"Downloading: {phase}_{self.client_name}_state_dict.pth",
+                        ascii=True,
+                    ) as pbar:
+                        for chunk in resp.iter_bytes(self.chunk_size):
+                            if chunk:
+                                f.write(chunk)
+                                pbar.update(len(chunk))
+            logging.info(
+                f"Saved id='{phase}_{self.client_name}_state_dict.pth' to {out_path}"
+            )
+            with open(out_path, "rb") as f:
+                data = f.read()
+            state_dict = torch.load(io.BytesIO(data), map_location="cpu")
+            # try:
+            #     model = torchvision.models.resnet18(weights=None)
+            # except TypeError:
+            #     model = torchvision.models.resnet18(pretrained=False)
+            # missing, unexpected = model.load_state_dict(state_dict, strict=False)
 
         logging.info(f"Key downloaded for {self.client_name}")
 
@@ -539,9 +595,7 @@ class FedAvgClient:
                 # Decompress and load the final state_dict after downloading
                 buffer = io.BytesIO(response.content)
                 self.public_key = self.__decompress_and_load(buffer.getvalue())
-                logging.info(
-                    f"Final sum downloaded for {self.client_name}"
-                )
+                logging.info(f"Final sum downloaded for {self.client_name}")
                 break
 
             elif response.status_code == 404:
