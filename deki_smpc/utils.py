@@ -1,3 +1,4 @@
+import os
 import secrets
 import string
 from dataclasses import dataclass
@@ -117,23 +118,35 @@ class SecurityUtils:
         return "".join(secret)
 
     @staticmethod
-    def generate_secure_random_mask(state_dict: dict) -> dict:
+    def generate_secure_random_mask(
+        state_dict: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
         """
         Generates a dictionary of secure random tensors with the same shape
         as the parameters in the given state_dict using the secrets module.
         """
+        # total number of int32s across all tensors
+        total_i32 = sum(p.numel() for p in state_dict.values())
+        buf = bytearray(os.urandom(total_i32 * 4))  # writable for frombuffer
+
         mask = {}
-        for name, param in state_dict.items():
-            num_elements = param.numel()
-            num_bytes = num_elements * 4  # 4 bytes per 32-bit int
-            random_bytes = bytes([secrets.randbelow(256) for _ in range(num_bytes)])
-            writable_bytes = bytearray(random_bytes)  # Make the buffer writable
-            random_tensor = torch.frombuffer(writable_bytes, dtype=torch.int32)
-            mask[name] = random_tensor.view(param.shape)
+        offset = 0
+        for name, p in state_dict.items():
+            n = p.numel()
+            t = torch.frombuffer(buf, dtype=torch.int32, count=n, offset=offset).view(
+                p.shape
+            )
+            # move to param's device if needed
+            if p.device.type != "cpu":
+                t = t.to(p.device, non_blocking=True)
+            mask[name] = t
+            offset += n * 4
         return mask
 
     @staticmethod
-    def dummy_generate_secure_random_mask(state_dict: dict) -> dict:
+    def dummy_generate_secure_random_mask(
+        state_dict: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
         """
         Generates a dictionary of tensors with ones with the same shape
         as the parameters in the given state_dict.
