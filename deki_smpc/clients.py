@@ -1,9 +1,7 @@
 import io
 import json
 import logging
-import os
 import sys
-import tempfile
 import time
 from copy import deepcopy
 from hashlib import sha256
@@ -160,54 +158,65 @@ class FedAvgClient:
     @__measure_time
     def __upload_model(self, state_dict: dict):
 
-        # Serialize and compress before uploading
-        buffer = self.__serialize_and_compress(state_dict)
+        bio = io.BytesIO()
+        torch.save(state_dict, bio, _use_new_zipfile_serialization=True)
+        data = bio.getvalue()
 
-        upload_response = self.__measure_request_time(
-            lambda session, **kwargs: session.post(**kwargs),
-            url=f"{self.url}/secure-fl/upload",
-            files={
-                "model": (
-                    "model.pt.gz",
-                    buffer,
-                    "application/octet-stream",
-                ),
-                "client_name": (None, self.client_name),
-            },
+        url = f"{self.url}/secure-fl/upload"
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "X-Client-Name": self.client_name,
+        }
+        with tqdm(
+            total=len(data),
+            unit="B",
+            unit_scale=True,
+            desc=f"Uploading: shielded model of {self.client_name}",
+            ascii=True,
+        ) as pbar:
+            self._stream_upload(url, headers, self._iter_bytes(data, pbar))
+        logging.info(
+            f"Uploaded shielded model of {self.client_name}: ({len(data)} bytes)."
         )
-
-        if upload_response.status_code != 200:
-            raise ConnectionError(
-                f"Failed to upload model to fl server: {upload_response.text}"
-            )
-
-        logging.info(f"Model uploaded by {self.client_name}.")
 
     @__measure_time
     def __download_model(self) -> dict:
-        # Download the final sum
+
+        url = f"{self.url}/secure-fl/download"
         while True:
-            response = self.__measure_request_time(
-                lambda session, **kwargs: session.get(**kwargs),
-                url=f"{self.url}/secure-fl/download",
-                stream=True,
+            with httpx.Client(timeout=None) as client:
+                with client.stream("GET", url) as resp:
+                    if resp.status_code == 404:
+                        sleep(1)
+                        continue
+                    elif resp.status_code != 200:
+                        raise ConnectionError(
+                            f"Failed to download model from fl server: {resp.text}"
+                        )
+
+                    total = int(resp.headers.get("content-length") or 0)
+                    buf = io.BytesIO()
+
+                    with tqdm(
+                        total=total if total > 0 else None,
+                        unit="B",
+                        unit_scale=True,
+                        desc=f"Downloading: Final model",
+                        ascii=True,
+                    ) as pbar:
+                        for chunk in resp.iter_bytes(self.chunk_size):
+                            if chunk:
+                                buf.write(chunk)
+                                pbar.update(len(chunk))
+
+            # Rewind and load directly from memory
+            buf.seek(0)
+            state_dict = torch.load(buf, map_location="cpu", weights_only=True)
+
+            logging.info(
+                f"Model downloaded to RAM (size={buf.getbuffer().nbytes} bytes)"
             )
-
-            if response.status_code == 200:
-                # Decompress and load the final state_dict after downloading
-                buffer = io.BytesIO(response.content)
-                state_dict = self.__decompress_and_load(buffer.getvalue())
-
-                logging.info("Model downloaded")
-                break
-
-            elif response.status_code == 404:
-                sleep(1)
-            else:
-                raise ConnectionError(
-                    f"Failed to download model from fl server: {response.text}"
-                )
-
+            break
         return state_dict
 
     @__measure_time
@@ -220,7 +229,6 @@ class FedAvgClient:
         url = f"{self.url}/key-aggregation/aggregation/upload"
         headers = {
             "Content-Type": "application/octet-stream",
-            "X-Filename": f"{phase}_{self.client_name}_state_dict.pth",
             "X-Client-Name": self.client_name,
             "X-Phase": str(phase),
         }
@@ -228,12 +236,12 @@ class FedAvgClient:
             total=len(data),
             unit="B",
             unit_scale=True,
-            desc=f"Uploading: {phase}_{self.client_name}_state_dict.pth",
+            desc=f"Uploading: phase {phase}, client {self.client_name}",
             ascii=True,
         ) as pbar:
             self._stream_upload(url, headers, self._iter_bytes(data, pbar))
         logging.info(
-            f"Uploaded id='{phase}_{self.client_name}_state_dict.pth' as {headers['X-Filename']} ({len(data)} bytes)."
+            f"Uploaded key for phase {phase} and client {self.client_name}: ({len(data)} bytes)."
         )
 
     @__measure_time
@@ -243,44 +251,38 @@ class FedAvgClient:
             "X-Phase": str(phase),
         }
         url = f"{self.url}/key-aggregation/aggregation/download"
-        with tempfile.TemporaryDirectory(prefix=f"{phase}") as tmpdir:
-            out_path = os.path.join(
-                tmpdir, f"{phase}_{self.client_name}_state_dict.pth"
-            )
-            with httpx.Client(timeout=None) as client:
-                with client.stream("GET", url, headers=headers) as resp:
-                    if resp.status_code == 404:
-                        logging.error(
-                            f"No artifact for id='{phase}_{self.client_name}_state_dict.pth'."
-                        )
-                        sys.exit(1)
-                    resp.raise_for_status()
-                    total = int(resp.headers.get("content-length") or 0)
-                    with open(out_path, "wb") as f, tqdm(
-                        total=total if total > 0 else None,
-                        unit="B",
-                        unit_scale=True,
-                        desc=f"Downloading: {phase}_{self.client_name}_state_dict.pth",
-                        ascii=True,
-                    ) as pbar:
-                        for chunk in resp.iter_bytes(self.chunk_size):
-                            if chunk:
-                                f.write(chunk)
-                                pbar.update(len(chunk))
-            logging.info(
-                f"Saved id='{phase}_{self.client_name}_state_dict.pth' to {out_path}"
-            )
-            with open(out_path, "rb") as f:
-                data = f.read()
-            state_dict = torch.load(io.BytesIO(data), map_location="cpu")
-            # try:
-            #     model = torchvision.models.resnet18(weights=None)
-            # except TypeError:
-            #     model = torchvision.models.resnet18(pretrained=False)
-            # missing, unexpected = model.load_state_dict(state_dict, strict=False)
 
-        logging.info(f"Key downloaded for {self.client_name}")
+        with httpx.Client(timeout=None) as client:
+            with client.stream("GET", url, headers=headers) as resp:
+                if resp.status_code == 404:
+                    logging.error(
+                        f"No artifact for phase {phase} and {self.client_name}"
+                    )
+                    sys.exit(1)
+                resp.raise_for_status()
 
+                total = int(resp.headers.get("content-length") or 0)
+                buf = io.BytesIO()
+
+                with tqdm(
+                    total=total if total > 0 else None,
+                    unit="B",
+                    unit_scale=True,
+                    desc=f"Downloading: phase {phase}, client {self.client_name}",
+                    ascii=True,
+                ) as pbar:
+                    for chunk in resp.iter_bytes(self.chunk_size):
+                        if chunk:
+                            buf.write(chunk)
+                            pbar.update(len(chunk))
+
+        # Rewind and load directly from memory
+        buf.seek(0)
+        state_dict = torch.load(buf, map_location="cpu", weights_only=True)
+
+        logging.info(
+            f"Key downloaded to RAM for {self.client_name} (size={buf.getbuffer().nbytes} bytes)"
+        )
         return state_dict
 
     @__measure_time
@@ -676,7 +678,7 @@ class FedAvgClient:
         """
         buffer = io.BytesIO(compressed_data)
         with lz4.frame.open(buffer, mode="rb") as f:
-            state_dict = torch.load(f, map_location="cpu")
+            state_dict = torch.load(f, map_location="cpu", weights_only=True)
         return state_dict
 
     @__measure_time
