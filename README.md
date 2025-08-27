@@ -74,14 +74,6 @@ deki-smpc empowers you to keep your framework (nnU-Net, MONAI, custom PyTorch lo
 You focus on training great models.
 We handle secure aggregation.
 
-## 📚 Documentation
-
-Coming soon! (Stay tuned.)
-
-## ⚠️ Work in Progress
-
-This is currently a work in progress to transfer the implementation used for the experiments in the paper into a clean and fully usable implementation.
-
 ## Cite
 
 > Hamm, B., Kirchhoff, Y., Rokuss, M., Schader, P., Neher, P., Parampottupadam, S., Floca, R., Maier-Hein, K. (2025). Efficient Privacy-Preserving Medical Cross-Silo Federated Learning. https://doi.org/10.36227/techrxiv.174650601.13181048/v1
