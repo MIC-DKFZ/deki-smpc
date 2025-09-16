@@ -268,4 +268,10 @@ class CkksClient:
             buf.read(), mapping_dict, ignored_dict
         )
 
-        return self.model.load_state_dict(aggregated_state_dict)
+        model = self.model.load_state_dict(aggregated_state_dict)
+
+        url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/secure-fl/mark-aggregation-download-complete"
+        headers = {"X-Client-Name": f"{self.client_name}"}
+        response = requests.post(url, headers=headers)
+
+        return model
