@@ -11,7 +11,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         "requests",
-        "torch",
+        "openfhe",
         "lz4",
         "urllib3",
         "numpy",

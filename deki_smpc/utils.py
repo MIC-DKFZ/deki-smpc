@@ -1,157 +1,200 @@
-import os
-import secrets
-import string
-from dataclasses import dataclass
+import logging
+import struct
+import time
 
+import httpx
 import torch
+from openfhe import *
+from tqdm import tqdm
+
+CHUNK_SIZE = 1024 * 1024  # 1MB
+
+_MAGIC = b"CHNK"  # 4 bytes
+_VERSION = 1  # 1 byte
+_HDR_FMT = ">4sB"  # magic, version
+_CNT_FMT = ">I"  # uint32: number of chunks
+_LEN_FMT = ">Q"  # uint64: per-chunk length
 
 
-class FixedPointConverter:
-    def __init__(self, precision_bits=16, device="cpu"):
-        self.precision_bits = precision_bits
-        self.scale = int(2**precision_bits)
-        self.device = device
+def measure_time(func):
+    """
+    Decorator to measure the execution time of a function.
+    """
 
-    @staticmethod
-    def nearest_int_division(tensor: torch.Tensor, integer: int) -> torch.Tensor:
-
-        if integer > 0:
-            raise ValueError("integer must be positive, got %s" % integer)
-
-        if not FixedPointConverter.is_int_tensor(tensor):
-            raise TypeError("input must be a LongTensor, got %s" % type(tensor))
-
-        lez = (tensor < 0).long()
-        rem = ((1 - lez) * tensor % integer) + (lez * ((integer - tensor) % integer))
-        quot = tensor.div(integer, rounding_mode="trunc")
-        cor = (2 * rem > integer).long()
-        return quot + tensor.sign() * cor
-
-    @staticmethod
-    def is_float_tensor(tensor: torch.Tensor) -> bool:
-        return torch.is_tensor(tensor) and tensor.dtype in [
-            torch.float16,
-            torch.float32,
-            torch.float64,
-        ]
-
-    @staticmethod
-    def is_int_tensor(tensor: torch.Tensor) -> bool:
-        return torch.is_tensor(tensor) and tensor.dtype in [
-            torch.uint8,
-            torch.int8,
-            torch.int16,
-            torch.int32,
-            torch.int64,
-        ]
-
-    def encode(self, tensor: torch.Tensor) -> torch.Tensor:
-        if not FixedPointConverter.is_float_tensor(tensor):
-            raise TypeError("Input must be float tensor, got %s." % type(tensor))
-
-        return (self.scale * tensor).long()
-
-    def decode(self, tensor: torch.Tensor) -> torch.Tensor:
-        if not FixedPointConverter.is_int_tensor(tensor):
-            raise TypeError("Input must be int tensor, got %s." % type(tensor))
-
-        if self.scale > 1:
-            cor = (tensor < 0).long()
-            div = tensor.div(self.scale - cor, rounding_mode="floor")
-            rem = tensor % self.scale
-            rem += (rem == 0).long() * self.scale * cor
-
-            tensor = div.float() + rem.float() / self.scale
-        else:
-            tensor = FixedPointConverter.nearest_int_division(tensor, self.scale)
-
-        return tensor.data
-
-
-@dataclass
-class KeyPair:
-    round: int = 0
-    # This is a tensor of same shape as the model parameters
-    private_encryption_key: dict = None
-    # This is a tensor of same shape as the model parameters
-    shared_decryption_key: dict = None
-
-
-# Only precompute the keys for the next round
-@dataclass
-class KeyQueue:
-    this_round: KeyPair = None
-    next_round: KeyPair = None
-
-
-class SecurityUtils:
-
-    def __init__(self):
-        self.key_queue = KeyQueue()
-
-    @staticmethod
-    def generate_preshared_secret(length: int = 32) -> str:
-        """Generate a cryptographically secure preshared secret.
-
-        - Must be at least `length` characters long (default: 32)
-        - Contains at least one uppercase letter, one digit, and one special character.
-        - Uses `secrets` for true randomness.
-        """
-        if length < 16:
-            raise ValueError("Secret length must be at least 16 characters")
-
-        # Securely select one character from each required category
-        uppercase = secrets.choice(string.ascii_uppercase)
-        digit = secrets.choice(string.digits)
-        special = secrets.choice(string.punctuation)
-
-        # Generate the remaining characters securely
-        all_characters = string.ascii_letters + string.digits + string.punctuation
-        remaining_chars = "".join(
-            secrets.choice(all_characters) for _ in range(length - 3)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        logging.info(
+            f"Execution time for {func.__name__}: {end_time - start_time:.2f} seconds"
         )
+        return result
 
-        # Combine and shuffle securely
-        secret = list(uppercase + digit + special + remaining_chars)
-        secrets.SystemRandom().shuffle(secret)
+    return wrapper
 
-        return "".join(secret)
 
-    @staticmethod
-    def generate_secure_random_mask(
-        state_dict: dict[str, torch.Tensor],
-    ) -> dict[str, torch.Tensor]:
-        """
-        Generates a dictionary of secure random tensors with the same shape
-        as the parameters in the given state_dict using the secrets module.
-        """
-        # total number of int32s across all tensors
-        total_i32 = sum(p.numel() for p in state_dict.values())
-        buf = bytearray(os.urandom(total_i32 * 4))  # writable for frombuffer
+def pack_chunks(chunks):
+    """
+    Pack an iterable of bytes-like objects into a single bytes payload.
 
-        mask = {}
-        offset = 0
-        for name, p in state_dict.items():
-            n = p.numel()
-            t = torch.frombuffer(buf, dtype=torch.int32, count=n, offset=offset).view(
-                p.shape
-            )
-            # move to param's device if needed
-            if p.device.type != "cpu":
-                t = t.to(p.device, non_blocking=True)
-            mask[name] = t
-            offset += n * 4
-        return mask
+    Wire format:
+      [MAGIC=CHNK][VERSION=1][COUNT:u32][ (LEN:u64)(DATA) ... repeated COUNT times ]
+    """
+    # Normalize to bytes and validate types early
+    bchunks = []
+    for idx, ch in enumerate(chunks):
+        if not isinstance(ch, (bytes, bytearray, memoryview)):
+            raise TypeError(f"Chunk {idx} is not bytes-like")
+        bchunks.append(bytes(ch))
 
-    @staticmethod
-    def dummy_generate_secure_random_mask(
-        state_dict: dict[str, torch.Tensor],
-    ) -> dict[str, torch.Tensor]:
-        """
-        Generates a dictionary of tensors with ones with the same shape
-        as the parameters in the given state_dict.
-        """
-        mask = {}
-        for name, param in state_dict.items():
-            mask[name] = torch.ones_like(param)
-        return mask
+    parts = []
+    parts.append(struct.pack(_HDR_FMT, _MAGIC, _VERSION))
+    parts.append(struct.pack(_CNT_FMT, len(bchunks)))
+    for ch in bchunks:
+        parts.append(struct.pack(_LEN_FMT, len(ch)))
+        parts.append(ch)
+    return b"".join(parts)
+
+
+def unpack_chunks(blob):
+    """
+    Unpack a bytes payload produced by pack_chunks back into a list of bytes.
+    Raises ValueError if the blob is malformed.
+    """
+    mv = memoryview(blob)
+    offset = 0
+
+    # Header
+    if len(mv) < struct.calcsize(_HDR_FMT) + struct.calcsize(_CNT_FMT):
+        raise ValueError("Blob too small")
+
+    magic, version = struct.unpack_from(_HDR_FMT, mv, offset)
+    offset += struct.calcsize(_HDR_FMT)
+
+    if magic != _MAGIC:
+        raise ValueError("Bad magic header")
+    if version != _VERSION:
+        raise ValueError(f"Unsupported version {version}")
+
+    (count,) = struct.unpack_from(_CNT_FMT, mv, offset)
+    offset += struct.calcsize(_CNT_FMT)
+
+    chunks = []
+    for i in range(count):
+        if offset + struct.calcsize(_LEN_FMT) > len(mv):
+            raise ValueError(f"Truncated before chunk {i} length")
+        (length,) = struct.unpack_from(_LEN_FMT, mv, offset)
+        offset += struct.calcsize(_LEN_FMT)
+
+        end = offset + length
+        if end > len(mv):
+            raise ValueError(f"Truncated in chunk {i} data")
+        chunks.append(bytes(mv[offset:end]))
+        offset = end
+
+    if offset != len(mv):
+        raise ValueError("Trailing bytes after last chunk")
+
+    return chunks
+
+
+def chunk_list(flat_list, max_length=8192):
+    """
+    Splits a long list into chunks of size max_length.
+
+    Args:
+        flat_list (list[float]): the input list
+        max_length (int): maximum length of each chunk
+
+    Returns:
+        list[list[float]]: list of chunks
+    """
+    return [flat_list[i : i + max_length] for i in range(0, len(flat_list), max_length)]
+
+
+def unchunk_list(chunks):
+    """
+    Flattens a list of lists back into a single list.
+
+    Args:
+        chunks (list[list[float]]): list of chunks
+
+    Returns:
+        list[float]: flattened list
+    """
+    return [x for chunk in chunks for x in chunk]
+
+
+def flatten_state_dict(
+    state_dict: dict[str, torch.Tensor], ignore_keys: list[str] = None
+):
+    if ignore_keys is None:
+        ignore_keys = []
+
+    flat_list = []
+    mapping_dict = {}
+    ignored_dict = {}
+
+    offset = 0
+    for key, tensor in state_dict.items():
+        if key in ignore_keys:
+            ignored_dict[key] = tensor.clone()
+            continue
+
+        values = tensor.flatten().tolist()
+        n = len(values)
+
+        mapping_dict[key] = {
+            "shape": tensor.shape,
+            "start": offset,
+            "end": offset + n,
+        }
+
+        flat_list.extend(values)
+        offset += n
+
+    return flat_list, mapping_dict, ignored_dict
+
+
+def reconstruct_state_dict(
+    flat_list: list[float],
+    mapping_dict: dict[str, dict],
+    ignored_dict: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    new_state_dict = {}
+
+    for key, meta in mapping_dict.items():
+        start, end = meta["start"], meta["end"]
+        shape = meta["shape"]
+
+        tensor_values = flat_list[start:end]
+        tensor = torch.tensor(tensor_values, dtype=torch.float32).reshape(shape)
+
+        new_state_dict[key] = tensor
+
+    # restore ignored values
+    for key, tensor in ignored_dict.items():
+        new_state_dict[key] = tensor.clone()
+
+    return new_state_dict
+
+
+def _iter_bytes(b: bytes, pbar: tqdm):
+    mv = memoryview(b)
+    total = len(b)
+    i = 0
+    while i < total:
+        j = i + CHUNK_SIZE
+        chunk = mv[i:j]
+        pbar.update(len(chunk))
+        yield chunk
+        i = j
+
+
+def _stream_upload(url: str, headers: dict, content_iterable):
+    # httpx >= 0.28 streaming upload path
+    with httpx.Client(timeout=None) as client:
+        with client.stream(
+            "PUT", url, headers=headers, content=content_iterable
+        ) as resp:
+            resp.raise_for_status()

@@ -19,7 +19,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--n", type=int, required=True, help="Number of clients to start"
+        "-n", type=int, required=True, help="Number of clients to start"
     )
     args = parser.parse_args()
 
