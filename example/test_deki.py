@@ -22,20 +22,51 @@ model = LinearModel()
 
 parser = argparse.ArgumentParser(description="Federated Learning Client")
 parser.add_argument(
-    # client
     "--client_name",
     type=str,
-    default="client_20",
+    default="client_1",
     help="Name of the client",
 )
 
+parser.add_argument(
+    "--aggregation_server_ip",
+    type=str,
+    default="127.0.0.1",
+    help="IP address of the aggregation server",
+)
+
+parser.add_argument(
+    "--aggregation_server_port",
+    type=int,
+    default=8080,
+    help="Port of the aggregation server",
+)
+
+parser.add_argument(
+    "--num_clients",
+    type=int,
+    default=4,
+    help="Total number of clients participating in federated learning",
+)
+
+parser.add_argument(
+    "--preshared_secret",
+    type=str,
+    default="my_secure_presHared_secret_123!",
+    help="Preshared secret for secure communication",
+)
+
 client_name = parser.parse_args().client_name
+aggregation_server_ip = parser.parse_args().aggregation_server_ip
+aggregation_server_port = parser.parse_args().aggregation_server_port
+num_clients = parser.parse_args().num_clients
+preshared_secret = parser.parse_args().preshared_secret
 
 client = FedAvgClient(
-    aggregation_server_ip="127.0.0.1",
-    aggregation_server_port=8080,
-    num_clients=4,
-    preshared_secret="my_secure_presHared_secret_123!",
+    aggregation_server_ip=aggregation_server_ip,
+    aggregation_server_port=aggregation_server_port,
+    num_clients=num_clients,
+    preshared_secret=preshared_secret,
     client_name=client_name,  # For better logging at the server. MUST BE UNIQUE ACROSS ALL CLIENTS
     model=model,
 )
