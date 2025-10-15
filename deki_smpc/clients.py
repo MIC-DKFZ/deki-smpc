@@ -1,6 +1,8 @@
+import inspect
 import io
 import json
 import logging
+import os
 import sys
 import time
 from copy import deepcopy
@@ -19,6 +21,51 @@ from urllib3.util import Retry
 from .models import KeyClientRegistration
 from .utils import FixedPointConverter, SecurityUtils
 
+logging.basicConfig(level=logging.INFO)
+
+# Unique run ID for this client run
+run_id = sha256(f"{time.time()}_{os.urandom(16)}".encode()).hexdigest()[:8]
+logging.info(f"Client run ID: {run_id}")
+
+time_measurement_data = {}
+time_measurement_log_path = os.path.join(
+    "./logs",
+    f"{run_id}_client_time_measurements.json",
+)
+os.makedirs(os.path.dirname(time_measurement_log_path), exist_ok=True)
+logging.info(f"Time measurement log path: {time_measurement_log_path}")
+
+transmitted_bytes_data = {}
+transmitted_bytes_log_path = os.path.join(
+    "./logs",
+    f"{run_id}_client_transmitted_bytes.json",
+)
+os.makedirs(os.path.dirname(transmitted_bytes_log_path), exist_ok=True)
+
+
+def measure_time(time_measurement_data=None, time_measurement_log_path=None):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            start_time = time.time()
+            result = func(*args, **kwargs)
+            end_time = time.time()
+            logging.info(
+                f"Execution time for {func.__name__}: {end_time - start_time:.2f} seconds"
+            )
+            unique_id = sha256(f"{func.__name__}_{start_time}".encode()).hexdigest()[:8]
+            time_measurement_data[f"{func.__name__}_{unique_id}"] = {
+                "start_time": start_time,
+                "end_time": end_time,
+                "duration": end_time - start_time,
+            }
+            with open(time_measurement_log_path, "w") as f:
+                json.dump(time_measurement_data, f, indent=4)
+            return result
+
+        return wrapper
+
+    return decorator
+
 
 class FedAvgClient:
 
@@ -31,7 +78,6 @@ class FedAvgClient:
         client_name: str = None,
         model: Module = None,
         ignore_model_keys: list = [],
-        logging_level: int = logging.INFO,
     ):
         assert num_clients is not None, "Number of clients must be provided"
         assert num_clients >= 3, "Number of clients must be at least 3"
@@ -50,7 +96,6 @@ class FedAvgClient:
         assert any(
             not char.isalnum() for char in preshared_secret
         ), "Preshared secret must contain at least one special character"
-        logging.basicConfig(level=logging_level)
 
         self.key_aggregation_server_ip = aggregation_server_ip
         self.key_aggregation_server_port = aggregation_server_port
@@ -108,23 +153,6 @@ class FedAvgClient:
         self.fpe = FixedPointConverter(device=self.device)
         self.chunk_size = 1024 * 1024  # 1 MB
 
-    @staticmethod
-    def __measure_time(func):
-        """
-        Decorator to measure the execution time of a function.
-        """
-
-        def wrapper(*args, **kwargs):
-            start_time = time.time()
-            result = func(*args, **kwargs)
-            end_time = time.time()
-            logging.info(
-                f"Execution time for {func.__name__}: {end_time - start_time:.2f} seconds"
-            )
-            return result
-
-        return wrapper
-
     def _iter_bytes(self, b: bytes, pbar: tqdm):
         mv = memoryview(b)
         total = len(b)
@@ -155,7 +183,10 @@ class FedAvgClient:
         logging.info(f"Request to {url} took {end_time - start_time:.2f} seconds")
         return response
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __upload_model(self, state_dict: dict):
 
         bio = io.BytesIO()
@@ -178,8 +209,17 @@ class FedAvgClient:
         logging.info(
             f"Uploaded shielded model of {self.client_name}: ({len(data)} bytes)."
         )
+        unique_id = sha256(
+            f"{inspect.stack()[0][3]}_{time.time()}".encode()
+        ).hexdigest()[:8]
+        with open(transmitted_bytes_log_path, "w") as f:
+            transmitted_bytes_data[f"shielded_model_upload_{unique_id}"] = len(data)
+            json.dump(transmitted_bytes_data, f, indent=4)
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __download_model(self) -> dict:
 
         url = f"{self.url}/secure-fl/download"
@@ -213,18 +253,28 @@ class FedAvgClient:
             buf.seek(0)
             state_dict = torch.load(buf, map_location="cpu", weights_only=True)
 
-            logging.info(
-                f"Model downloaded to RAM (size={buf.getbuffer().nbytes} bytes)"
-            )
+            size = buf.getbuffer().nbytes
+            logging.info(f"Model downloaded to RAM (size={size} bytes)")
+            unique_id = sha256(
+                f"{inspect.stack()[0][3]}_{time.time()}".encode()
+            ).hexdigest()[:8]
+            with open(transmitted_bytes_log_path, "w") as f:
+                transmitted_bytes_data[f"final_model_download_{unique_id}"] = size
+                json.dump(transmitted_bytes_data, f, indent=4)
+
             break
         return state_dict
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __upload_key(self, state_dict: dict, phase: int):
 
         bio = io.BytesIO()
         torch.save(state_dict, bio, _use_new_zipfile_serialization=True)
         data = bio.getvalue()
+        len_data = len(data)
 
         url = f"{self.url}/key-aggregation/aggregation/upload"
         headers = {
@@ -233,7 +283,7 @@ class FedAvgClient:
             "X-Phase": str(phase),
         }
         with tqdm(
-            total=len(data),
+            total=len_data,
             unit="B",
             unit_scale=True,
             desc=f"Uploading: phase {phase}, client {self.client_name}",
@@ -241,10 +291,19 @@ class FedAvgClient:
         ) as pbar:
             self._stream_upload(url, headers, self._iter_bytes(data, pbar))
         logging.info(
-            f"Uploaded key for phase {phase} and client {self.client_name}: ({len(data)} bytes)."
+            f"Uploaded key for phase {phase} and client {self.client_name}: ({len_data} bytes)."
         )
+        unique_id = sha256(
+            f"{inspect.stack()[0][3]}_{time.time()}".encode()
+        ).hexdigest()[:8]
+        with open(transmitted_bytes_log_path, "w") as f:
+            transmitted_bytes_data[f"phase_{phase}_upload_{unique_id}"] = len_data
+            json.dump(transmitted_bytes_data, f, indent=4)
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __download_key(self, phase: int) -> dict:
         headers = {
             "X-Client-Name": self.client_name,
@@ -278,14 +337,26 @@ class FedAvgClient:
 
         # Rewind and load directly from memory
         buf.seek(0)
+
+        size = buf.getbuffer().nbytes
+        unique_id = sha256(
+            f"{inspect.stack()[0][3]}_{time.time()}".encode()
+        ).hexdigest()[:8]
+        with open(transmitted_bytes_log_path, "w") as f:
+            transmitted_bytes_data[f"phase_{phase}_download_{unique_id}"] = size
+            json.dump(transmitted_bytes_data, f, indent=4)
+
         state_dict = torch.load(buf, map_location="cpu", weights_only=True)
 
         logging.info(
-            f"Key downloaded to RAM for {self.client_name} (size={buf.getbuffer().nbytes} bytes)"
+            f"Key downloaded to RAM for {self.client_name} (size={size} bytes)"
         )
         return state_dict
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __add_keys(self, downloaded_state_dict: dict):
         """
         Add the downloaded state_dict values to the existing state_dict values.
@@ -314,7 +385,10 @@ class FedAvgClient:
                     # Offload tensors back to CPU
                     self.public_key[key] = self.public_key[key].cpu()
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __convert_state_dict_to_int(self, state_dict: dict) -> dict:
         for key, val in state_dict.items():
             if key in self.ignore_model_keys:
@@ -324,7 +398,10 @@ class FedAvgClient:
 
         return state_dict
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __convert_int_to_state_dict(self, int_state_dict: dict) -> dict:
         for key, val in int_state_dict.items():
             if key in self.ignore_model_keys:
@@ -342,7 +419,10 @@ class FedAvgClient:
 
         return int_state_dict
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __shield_key(self, state_dict: dict, secure_random_mask: dict = None):
         """
         Shield the state_dict by applying a random mask to each tensor.
@@ -360,7 +440,10 @@ class FedAvgClient:
 
         return state_dict, secure_random_mask
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __unshield_key(
         self, shielded_state_dict: dict, secure_random_mask: dict = None
     ):
@@ -380,7 +463,10 @@ class FedAvgClient:
 
         return self.__convert_int_to_state_dict(shielded_state_dict)
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __phase_1_routine(self):
         # Phase 1: Group key generation
 
@@ -465,7 +551,10 @@ class FedAvgClient:
                 break
             sleep(1)  # Sleep for a while before checking again
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __phase_2_routine(self):
         # Phase 2:
 
@@ -542,7 +631,10 @@ class FedAvgClient:
 
             sleep(1)  # Sleep for a while before checking again
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __phase_3_routine(self):
         """
         Phase 3: Final sum upload and download.
@@ -563,6 +655,13 @@ class FedAvgClient:
         if recipient_info.get("recipient") == self.client_name:
             # Serialize and compress the state_dict before uploading
             buffer = self.__serialize_and_compress(self.public_key)
+            unique_id = sha256(
+                f"{inspect.stack()[0][3]}_{time.time()}".encode()
+            ).hexdigest()[:8]
+            with open(transmitted_bytes_log_path, "w") as f:
+                size = buffer.getbuffer().nbytes
+                transmitted_bytes_data[f"final_sum_upload_{unique_id}"] = size
+                json.dump(transmitted_bytes_data, f, indent=4)
 
             upload_response = self.__measure_request_time(
                 lambda session, **kwargs: session.post(**kwargs),
@@ -596,6 +695,14 @@ class FedAvgClient:
             if response.status_code == 200:
                 # Decompress and load the final state_dict after downloading
                 buffer = io.BytesIO(response.content)
+                unique_id = sha256(
+                    f"{inspect.stack()[0][3]}_{time.time()}".encode()
+                ).hexdigest()[:8]
+                with open(transmitted_bytes_log_path, "w") as f:
+                    size = buffer.getbuffer().nbytes
+                    transmitted_bytes_data[f"final_sum_download_{unique_id}"] = size
+                    json.dump(transmitted_bytes_data, f, indent=4)
+
                 self.public_key = self.__decompress_and_load(buffer.getvalue())
                 logging.info(f"Final sum downloaded for {self.client_name}")
                 break
@@ -607,7 +714,10 @@ class FedAvgClient:
                     f"Failed to download final sum from key aggregation server: {response.text}"
                 )
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __key_aggregation_routine(self):
         logging.info("-- PHASE 1 --")
         self.__phase_1_routine()
@@ -640,7 +750,10 @@ class FedAvgClient:
         logging.info("-- PHASE 3 --")
         self.__phase_3_routine()
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __connect_to_key_aggregation_server(self):
 
         request_body = KeyClientRegistration(
@@ -660,7 +773,10 @@ class FedAvgClient:
                 f"Failed to connect to key aggregation server: {response.text}"
             )
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __serialize_and_compress(self, state_dict: dict) -> io.BytesIO:
         """
         Serialize and compress the state_dict.
@@ -671,7 +787,10 @@ class FedAvgClient:
         buffer.seek(0)
         return buffer
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __decompress_and_load(self, compressed_data: bytes) -> dict:
         """
         Decompress and load the state_dict.
@@ -681,11 +800,17 @@ class FedAvgClient:
             state_dict = torch.load(f, map_location="cpu", weights_only=True)
         return state_dict
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def prepare_transfer(self):
         self.__key_aggregation_routine()
 
-    @__measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def aggregate(self) -> Module:
 
         self.prepare_transfer()
