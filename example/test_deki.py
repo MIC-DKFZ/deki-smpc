@@ -2,10 +2,9 @@ import argparse
 
 import torch
 import torch.nn as nn
-
-from deki_smpc import CkksClient
 from torchvision.models import resnet18
 
+from deki_smpc import CkksClient
 
 # class LinearModel(nn.Module):
 #     def __init__(self):
