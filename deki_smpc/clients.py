@@ -21,7 +21,7 @@ from urllib3.util import Retry
 from .models import KeyClientRegistration
 from .utils import FixedPointConverter, SecurityUtils
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.ERROR)
 
 # Unique run ID for this client run
 run_id = sha256(f"{time.time()}_{os.urandom(16)}".encode()).hexdigest()[:8]
@@ -149,7 +149,7 @@ class FedAvgClient:
         self.private_key = deepcopy(self.public_key) if self.public_key else None
         self.secure_random_mask = None
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cpu")
         self.fpe = FixedPointConverter(device=self.device)
         self.chunk_size = 1024 * 1024  # 1 MB
 
