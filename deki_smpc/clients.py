@@ -1,5 +1,10 @@
+import inspect
 import io
+import json
 import logging
+import os
+import time
+from hashlib import sha256
 
 import httpx
 import requests
@@ -21,7 +26,6 @@ from deki_smpc.utils import (
     _stream_upload,
     chunk_list,
     flatten_state_dict,
-    measure_time,
     pack_chunks,
     reconstruct_state_dict,
     unchunk_list,
@@ -29,6 +33,51 @@ from deki_smpc.utils import (
     list_of_float_to_int,
     list_of_int_to_float,
 )
+
+logging.basicConfig(level=logging.ERROR)
+
+# Unique run ID for this client run
+run_id = sha256(f"{time.time()}_{os.urandom(16)}".encode()).hexdigest()[:8]
+logging.info(f"Client run ID: {run_id}")
+
+time_measurement_data = {}
+time_measurement_log_path = os.path.join(
+    "./logs",
+    f"{run_id}_client_time_measurements.json",
+)
+os.makedirs(os.path.dirname(time_measurement_log_path), exist_ok=True)
+logging.info(f"Time measurement log path: {time_measurement_log_path}")
+
+transmitted_bytes_data = {}
+transmitted_bytes_log_path = os.path.join(
+    "./logs",
+    f"{run_id}_client_transmitted_bytes.json",
+)
+os.makedirs(os.path.dirname(transmitted_bytes_log_path), exist_ok=True)
+
+
+def measure_time(time_measurement_data=None, time_measurement_log_path=None):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            start_time = time.time()
+            result = func(*args, **kwargs)
+            end_time = time.time()
+            logging.info(
+                f"Execution time for {func.__name__}: {end_time - start_time:.2f} seconds"
+            )
+            unique_id = sha256(f"{func.__name__}_{start_time}".encode()).hexdigest()[:8]
+            time_measurement_data[f"{func.__name__}_{unique_id}"] = {
+                "start_time": start_time,
+                "end_time": end_time,
+                "duration": end_time - start_time,
+            }
+            with open(time_measurement_log_path, "w") as f:
+                json.dump(time_measurement_data, f, indent=4)
+            return result
+
+        return wrapper
+
+    return decorator
 
 
 class BfvClient:
@@ -86,6 +135,10 @@ class BfvClient:
         MAX_RETRIES = 3
         RETRY_DELAY = 2  # seconds
 
+        @measure_time(
+            time_measurement_data=time_measurement_data,
+            time_measurement_log_path=time_measurement_log_path,
+        )
         def download_file(url, payload, filename):
             for attempt in range(MAX_RETRIES):
                 response = requests.get(url, json=payload)
@@ -162,6 +215,10 @@ class BfvClient:
             time.sleep(2)
             logging.info("Waiting for all clients to register...")
 
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __create_encrypted_payload(self) -> tuple[bytes, dict, dict, int]:
         x, mapping_dict, ignored_dict = flatten_state_dict(
             self.state_dict, self.ignore_model_keys
@@ -181,6 +238,10 @@ class BfvClient:
         payload = pack_chunks(chunks)
         return payload, mapping_dict, ignored_dict, len(chunks)
 
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __load_encrypted_payload(
         self, payload: bytes, mapping_dict, ignored_dict
     ) -> list:
@@ -216,12 +277,11 @@ class BfvClient:
         )
         return reconstructed_state_dict
 
-    @measure_time
-    def aggregate(self) -> Module:
-        payload, mapping_dict, ignored_dict, num_chunks = (
-            self.__create_encrypted_payload()
-        )
-
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
+    def upload_model(self, num_chunks: int, payload: bytes):
         # Send the payload to the aggregation server
         url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/secure-fl/upload"
 
@@ -230,6 +290,7 @@ class BfvClient:
             "X-Client-Name": f"{self.client_name}",
             "X-Chunk-Total": str(num_chunks),
         }
+        size = len(payload)
         with tqdm(
             total=len(payload),
             unit="B",
@@ -239,22 +300,26 @@ class BfvClient:
         ) as pbar:
             _stream_upload(url, headers, _iter_bytes(payload, pbar))
 
-        del payload
+        logging.info(f"Uploaded shielded model of {self.client_name}: ({size} bytes).")
+        unique_id = sha256(
+            f"{inspect.stack()[0][3]}_{time.time()}".encode()
+        ).hexdigest()[:8]
+        with open(transmitted_bytes_log_path, "w") as f:
+            transmitted_bytes_data[f"shielded_model_upload_{unique_id}"] = size
+            json.dump(transmitted_bytes_data, f, indent=4)
 
-        # Wait for the aggregation server to finish aggregation
-        while True:
-            url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/secure-fl/model-aggregation-completed"
-            response = requests.get(url, headers=headers)
-
-            body = response.json()
-            if body.get("model_aggregation_completed"):
-                logging.info("Aggregation done. Proceeding to download...")
-                break
-            time.sleep(2)
-            logging.info("Waiting for aggregation to be done...")
-
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
+    def download_model(self, num_chunks: int) -> io.BytesIO:
         # Download the aggregated encrypted model from the aggregation server
         url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/secure-fl/download-aggregate"
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "X-Client-Name": f"{self.client_name}",
+            "X-Chunk-Total": str(num_chunks),
+        }
         with httpx.Client(timeout=None) as client:
             with client.stream("GET", url, headers=headers) as resp:
 
@@ -274,6 +339,48 @@ class BfvClient:
                             pbar.update(len(chunk))
 
         buf.seek(0)
+        size = buf.getbuffer().nbytes
+        unique_id = sha256(
+            f"{inspect.stack()[0][3]}_{time.time()}".encode()
+        ).hexdigest()[:8]
+        with open(transmitted_bytes_log_path, "w") as f:
+            transmitted_bytes_data[f"shielded_model_upload_{unique_id}"] = size
+            json.dump(transmitted_bytes_data, f, indent=4)
+        logging.info(f"Model downloaded to RAM (size={size} bytes)")
+        return buf
+
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
+    def aggregate(self) -> Module:
+        payload, mapping_dict, ignored_dict, num_chunks = (
+            self.__create_encrypted_payload()
+        )
+
+        self.upload_model(num_chunks=num_chunks, payload=payload)
+
+        del payload
+
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "X-Client-Name": f"{self.client_name}",
+            "X-Chunk-Total": str(num_chunks),
+        }
+        # Wait for the aggregation server to finish aggregation
+        while True:
+            url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/secure-fl/model-aggregation-completed"
+            response = requests.get(url, headers=headers)
+
+            body = response.json()
+            if body.get("model_aggregation_completed"):
+                logging.info("Aggregation done. Proceeding to download...")
+                break
+            time.sleep(2)
+            logging.info("Waiting for aggregation to be done...")
+
+        # Download the aggregated encrypted model from the aggregation server
+        buf = self.download_model(num_chunks)
 
         aggregated_state_dict = self.__load_encrypted_payload(
             buf.read(), mapping_dict, ignored_dict
