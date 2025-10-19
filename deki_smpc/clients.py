@@ -135,6 +135,10 @@ class BgvClient:
         MAX_RETRIES = 3
         RETRY_DELAY = 2  # seconds
 
+        @measure_time(
+            time_measurement_data=time_measurement_data,
+            time_measurement_log_path=time_measurement_log_path,
+        )
         def download_file(url, payload, filename):
             for attempt in range(MAX_RETRIES):
                 response = requests.get(url, json=payload)
