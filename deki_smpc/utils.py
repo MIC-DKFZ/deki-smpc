@@ -16,6 +16,24 @@ _CNT_FMT = ">I"  # uint32: number of chunks
 _LEN_FMT = ">Q"  # uint64: per-chunk length
 
 
+class FixedPointConverter:
+    def __init__(self, precision_bits=16):
+        self.precision_bits = precision_bits
+        self.scale = 2**precision_bits
+
+    def encode(self, value: float) -> int:
+        """Convert a float to fixed-point integer."""
+        if not isinstance(value, (float, int)):
+            raise TypeError(f"Input must be float or int, got {type(value)}")
+        return int(round(value * self.scale))
+
+    def decode(self, value: int) -> float:
+        """Convert fixed-point integer back to float."""
+        if not isinstance(value, int):
+            raise TypeError(f"Input must be int, got {type(value)}")
+        return value / self.scale
+
+
 def measure_time(func):
     """
     Decorator to measure the execution time of a function.
@@ -154,6 +172,26 @@ def flatten_state_dict(
         offset += n
 
     return flat_list, mapping_dict, ignored_dict
+
+
+def list_of_float_to_int(flat_list: list[float]) -> list[int]:
+
+    fpc = FixedPointConverter()
+
+    for i, entry in enumerate(flat_list):
+        flat_list[i] = fpc.encode(entry)
+
+    return flat_list
+
+
+def list_of_int_to_float(flat_list: list[int]) -> list[float]:
+
+    fpc = FixedPointConverter()
+
+    for i, entry in enumerate(flat_list):
+        flat_list[i] = fpc.decode(entry)
+
+    return flat_list
 
 
 def reconstruct_state_dict(

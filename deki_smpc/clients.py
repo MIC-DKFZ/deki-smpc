@@ -26,10 +26,12 @@ from deki_smpc.utils import (
     reconstruct_state_dict,
     unchunk_list,
     unpack_chunks,
+    list_of_float_to_int,
+    list_of_int_to_float,
 )
 
 
-class CkksClient:
+class BfvClient:
 
     def __init__(
         self,
@@ -129,6 +131,9 @@ class CkksClient:
         )
         self.seckey, _ = DeserializePrivateKey(sec_file, BINARY)
 
+        cc.EvalMultKeyGen(self.seckey)
+        cc.EvalRotateKeyGen(self.seckey, [1, 2, -1, -2])
+
         # register the client at the aggregation server
 
         headers = {"X-Client-Name": self.client_name}
@@ -161,10 +166,13 @@ class CkksClient:
         x, mapping_dict, ignored_dict = flatten_state_dict(
             self.state_dict, self.ignore_model_keys
         )
+
+        x = list_of_float_to_int(x)
+
         chunks = chunk_list(x, max_length=MAX_LENGTH)
 
         for i, chunk in enumerate(chunks):
-            ptxt = cc.MakeCKKSPackedPlaintext(chunk)
+            ptxt = cc.MakePackedPlaintext(chunk)
             c = cc.Encrypt(self.pubkey, ptxt)
             # Serialize and deserialize the ciphertext
             chunks[i] = Serialize(c, BINARY)
@@ -191,7 +199,7 @@ class CkksClient:
             cc.EvalMultKeyGen(self.seckey)
             # Decrypt each chunk
             chunk = cc.Decrypt(chunk, self.seckey)
-            chunks[i] = chunk.GetCKKSPackedValue()
+            chunks[i] = chunk.GetPackedValue()
             # keep only the real part
             for j, number in enumerate(chunks[i]):
                 chunks[i][j] = number.real
@@ -199,9 +207,12 @@ class CkksClient:
         del cc
         del chunk
 
+        unchunked_list_of_ints = unchunk_list(chunks)
+        unchunked_list_of_floats = list_of_int_to_float(unchunked_list_of_ints)
+
         # Rebuild the state_dict
         reconstructed_state_dict = reconstruct_state_dict(
-            unchunk_list(chunks), mapping_dict, ignored_dict
+            unchunked_list_of_floats, mapping_dict, ignored_dict
         )
         return reconstructed_state_dict
 

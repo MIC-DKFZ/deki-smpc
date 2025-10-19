@@ -3,23 +3,23 @@ import argparse
 import torch
 import torch.nn as nn
 
-from deki_smpc import CkksClient
+from deki_smpc import BfvClient
 from torchvision.models import resnet18
 
 
-# class LinearModel(nn.Module):
-#     def __init__(self):
-#         super(LinearModel, self).__init__()
-#         self.linear = nn.Linear(in_features=1, out_features=10)
-#         with torch.no_grad():
-#             self.linear.weight.fill_(3.123134)
-#             self.linear.bias.fill_(1.123123)
+class LinearModel(nn.Module):
+    def __init__(self):
+        super(LinearModel, self).__init__()
+        self.linear = nn.Linear(in_features=1, out_features=10)
+        with torch.no_grad():
+            self.linear.weight.fill_(3.123134)
+            self.linear.bias.fill_(1.123123)
 
-#     def forward(self, x):
-#         return self.linear(x)
+    def forward(self, x):
+        return self.linear(x)
 
 
-model = resnet18(pretrained=True)
+model = resnet18()
 
 parser = argparse.ArgumentParser(description="Federated Learning Client")
 parser.add_argument(
@@ -32,7 +32,7 @@ parser.add_argument(
 
 client_name = parser.parse_args().client_name
 
-client = CkksClient(
+client = BfvClient(
     aggregation_server_ip="127.0.0.1",
     aggregation_server_port=8081,
     key_server_ip="127.0.0.1",
