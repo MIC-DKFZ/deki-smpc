@@ -3,7 +3,7 @@ import argparse
 import torch
 import torch.nn as nn
 
-from deki_smpc import BfvClient
+from deki_smpc import BgvClient
 from torchvision.models import resnet18
 
 
@@ -32,7 +32,7 @@ parser.add_argument(
 
 client_name = parser.parse_args().client_name
 
-client = BfvClient(
+client = BgvClient(
     aggregation_server_ip="127.0.0.1",
     aggregation_server_port=8081,
     key_server_ip="127.0.0.1",

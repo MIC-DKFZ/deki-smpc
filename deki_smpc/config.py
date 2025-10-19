@@ -1,13 +1,16 @@
-from openfhe import CCParamsBFVRNS, GenCryptoContext, PKESchemeFeature
+from openfhe import CCParamsBGVRNS, GenCryptoContext, PKESchemeFeature
 
-parameters = CCParamsBFVRNS()
-parameters.SetPlaintextModulus(1032193)
+from openfhe import *
+
+parameters = CCParamsBGVRNS()
+parameters.SetPlaintextModulus(1146881)  # prime, ~1.15M
 parameters.SetMultiplicativeDepth(2)
+parameters.SetRingDim(16384)  # m = 32768 divides t-1
 
-cc = GenCryptoContext(parameters)
+crypto_context = GenCryptoContext(parameters)
+crypto_context.Enable(PKESchemeFeature.PKE)
+crypto_context.Enable(PKESchemeFeature.KEYSWITCH)
+crypto_context.Enable(PKESchemeFeature.LEVELEDSHE)
 
-cc.Enable(PKESchemeFeature.PKE)
-cc.Enable(PKESchemeFeature.KEYSWITCH)
-cc.Enable(PKESchemeFeature.LEVELEDSHE)
 
-MAX_LENGTH = cc.GetRingDimension() // 2
+MAX_LENGTH = crypto_context.GetRingDimension() // 2

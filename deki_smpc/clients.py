@@ -15,7 +15,7 @@ from openfhe import (
 from torch.nn import Module
 from tqdm import tqdm
 
-from deki_smpc.config import MAX_LENGTH, cc
+from deki_smpc.config import MAX_LENGTH, crypto_context
 from deki_smpc.utils import (
     _iter_bytes,
     _stream_upload,
@@ -31,7 +31,7 @@ from deki_smpc.utils import (
 )
 
 
-class BfvClient:
+class BgvClient:
 
     def __init__(
         self,
@@ -131,8 +131,8 @@ class BfvClient:
         )
         self.seckey, _ = DeserializePrivateKey(sec_file, BINARY)
 
-        cc.EvalMultKeyGen(self.seckey)
-        cc.EvalRotateKeyGen(self.seckey, [1, 2, -1, -2])
+        crypto_context.EvalMultKeyGen(self.seckey)
+        crypto_context.EvalRotateKeyGen(self.seckey, [1, 2, -1, -2])
 
         # register the client at the aggregation server
 
@@ -172,8 +172,8 @@ class BfvClient:
         chunks = chunk_list(x, max_length=MAX_LENGTH)
 
         for i, chunk in enumerate(chunks):
-            ptxt = cc.MakePackedPlaintext(chunk)
-            c = cc.Encrypt(self.pubkey, ptxt)
+            ptxt = crypto_context.MakePackedPlaintext(chunk)
+            c = crypto_context.Encrypt(self.pubkey, ptxt)
             # Serialize and deserialize the ciphertext
             chunks[i] = Serialize(c, BINARY)
 
@@ -196,9 +196,9 @@ class BfvClient:
                 f"{self.client_name}_ciphertext_aggregated.txt", BINARY
             )
             cc = chunk.GetCryptoContext()
-            cc.EvalMultKeyGen(self.seckey)
+            crypto_context.EvalMultKeyGen(self.seckey)
             # Decrypt each chunk
-            chunk = cc.Decrypt(chunk, self.seckey)
+            chunk = crypto_context.Decrypt(chunk, self.seckey)
             chunks[i] = chunk.GetPackedValue()
             # keep only the real part
             for j, number in enumerate(chunks[i]):
