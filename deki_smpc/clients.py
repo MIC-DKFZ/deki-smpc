@@ -1,9 +1,12 @@
 import io
+import json
 import logging
+import os
+import time
+from hashlib import sha256
 
 import httpx
 import requests
-import time
 import torch
 from openfhe import (
     BINARY,
@@ -21,12 +24,56 @@ from deki_smpc.utils import (
     _stream_upload,
     chunk_list,
     flatten_state_dict,
-    measure_time,
     pack_chunks,
     reconstruct_state_dict,
     unchunk_list,
     unpack_chunks,
 )
+
+logging.basicConfig(level=logging.ERROR)
+
+# Unique run ID for this client run
+run_id = sha256(f"{time.time()}_{os.urandom(16)}".encode()).hexdigest()[:8]
+logging.info(f"Client run ID: {run_id}")
+
+time_measurement_data = {}
+time_measurement_log_path = os.path.join(
+    "./logs",
+    f"{run_id}_client_time_measurements.json",
+)
+os.makedirs(os.path.dirname(time_measurement_log_path), exist_ok=True)
+logging.info(f"Time measurement log path: {time_measurement_log_path}")
+
+transmitted_bytes_data = {}
+transmitted_bytes_log_path = os.path.join(
+    "./logs",
+    f"{run_id}_client_transmitted_bytes.json",
+)
+os.makedirs(os.path.dirname(transmitted_bytes_log_path), exist_ok=True)
+
+
+def measure_time(time_measurement_data=None, time_measurement_log_path=None):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            start_time = time.time()
+            result = func(*args, **kwargs)
+            end_time = time.time()
+            logging.info(
+                f"Execution time for {func.__name__}: {end_time - start_time:.2f} seconds"
+            )
+            unique_id = sha256(f"{func.__name__}_{start_time}".encode()).hexdigest()[:8]
+            time_measurement_data[f"{func.__name__}_{unique_id}"] = {
+                "start_time": start_time,
+                "end_time": end_time,
+                "duration": end_time - start_time,
+            }
+            with open(time_measurement_log_path, "w") as f:
+                json.dump(time_measurement_data, f, indent=4)
+            return result
+
+        return wrapper
+
+    return decorator
 
 
 class CkksClient:
@@ -42,14 +89,11 @@ class CkksClient:
         model: Module = None,
         ignore_model_keys: list = [],
         preshared_secret: str = None,
-        logging_level: int = logging.INFO,
     ):
         assert num_clients is not None, "Number of clients must be provided"
         assert num_clients >= 2, "Number of clients must be at least 2"
         assert model is not None, "Torch model must be provided"
         assert preshared_secret is not None, "Preshared secret must be provided"
-
-        logging.basicConfig(level=logging_level)
 
         self.key_aggregation_server_ip = aggregation_server_ip
         self.key_aggregation_server_port = aggregation_server_port
@@ -84,6 +128,10 @@ class CkksClient:
         MAX_RETRIES = 3
         RETRY_DELAY = 2  # seconds
 
+        @measure_time(
+            time_measurement_data=time_measurement_data,
+            time_measurement_log_path=time_measurement_log_path,
+        )
         def download_file(url, payload, filename):
             for attempt in range(MAX_RETRIES):
                 response = requests.get(url, json=payload)
@@ -157,6 +205,10 @@ class CkksClient:
             time.sleep(2)
             logging.info("Waiting for all clients to register...")
 
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __create_encrypted_payload(self) -> tuple[bytes, dict, dict, int]:
         x, mapping_dict, ignored_dict = flatten_state_dict(
             self.state_dict, self.ignore_model_keys
@@ -173,6 +225,10 @@ class CkksClient:
         payload = pack_chunks(chunks)
         return payload, mapping_dict, ignored_dict, len(chunks)
 
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def __load_encrypted_payload(
         self, payload: bytes, mapping_dict, ignored_dict
     ) -> list:
@@ -205,7 +261,10 @@ class CkksClient:
         )
         return reconstructed_state_dict
 
-    @measure_time
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
     def aggregate(self) -> Module:
         payload, mapping_dict, ignored_dict, num_chunks = (
             self.__create_encrypted_payload()
