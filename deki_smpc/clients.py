@@ -1,3 +1,4 @@
+import inspect
 import io
 import json
 import logging
@@ -265,11 +266,7 @@ class CkksClient:
         time_measurement_data=time_measurement_data,
         time_measurement_log_path=time_measurement_log_path,
     )
-    def aggregate(self) -> Module:
-        payload, mapping_dict, ignored_dict, num_chunks = (
-            self.__create_encrypted_payload()
-        )
-
+    def upload_model(self, num_chunks: int, payload: bytes):
         # Send the payload to the aggregation server
         url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/secure-fl/upload"
 
@@ -278,8 +275,10 @@ class CkksClient:
             "X-Client-Name": f"{self.client_name}",
             "X-Chunk-Total": str(num_chunks),
         }
+
+        size = len(payload)
         with tqdm(
-            total=len(payload),
+            total=size,
             unit="B",
             unit_scale=True,
             desc=f"Uploading: ciphertext.txt for client {self.client_name}",
@@ -287,22 +286,28 @@ class CkksClient:
         ) as pbar:
             _stream_upload(url, headers, _iter_bytes(payload, pbar))
 
-        del payload
+        logging.info(f"Uploaded shielded model of {self.client_name}: ({size} bytes).")
+        unique_id = sha256(
+            f"{inspect.stack()[0][3]}_{time.time()}".encode()
+        ).hexdigest()[:8]
+        with open(transmitted_bytes_log_path, "w") as f:
+            transmitted_bytes_data[f"shielded_model_upload_{unique_id}"] = size
+            json.dump(transmitted_bytes_data, f, indent=4)
 
-        # Wait for the aggregation server to finish aggregation
-        while True:
-            url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/secure-fl/model-aggregation-completed"
-            response = requests.get(url, headers=headers)
-
-            body = response.json()
-            if body.get("model_aggregation_completed"):
-                logging.info("Aggregation done. Proceeding to download...")
-                break
-            time.sleep(2)
-            logging.info("Waiting for aggregation to be done...")
-
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
+    def download_model(self, num_chunks: int) -> io.BytesIO:
         # Download the aggregated encrypted model from the aggregation server
         url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/secure-fl/download-aggregate"
+
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "X-Client-Name": f"{self.client_name}",
+            "X-Chunk-Total": str(num_chunks),
+        }
+
         with httpx.Client(timeout=None) as client:
             with client.stream("GET", url, headers=headers) as resp:
 
@@ -322,6 +327,52 @@ class CkksClient:
                             pbar.update(len(chunk))
 
         buf.seek(0)
+        size = buf.getbuffer().nbytes
+        unique_id = sha256(
+            f"{inspect.stack()[0][3]}_{time.time()}".encode()
+        ).hexdigest()[:8]
+        with open(transmitted_bytes_log_path, "w") as f:
+            transmitted_bytes_data[f"shielded_model_upload_{unique_id}"] = size
+            json.dump(transmitted_bytes_data, f, indent=4)
+        logging.info(f"Model downloaded to RAM (size={size} bytes)")
+        return buf
+
+    @measure_time(
+        time_measurement_data=time_measurement_data,
+        time_measurement_log_path=time_measurement_log_path,
+    )
+    def aggregate(self) -> Module:
+        payload, mapping_dict, ignored_dict, num_chunks = (
+            self.__create_encrypted_payload()
+        )
+
+        # Upload the encrypted model to the aggregation server
+        self.upload_model(num_chunks, payload)
+
+        del payload
+
+        # Wait for the aggregation server to finish aggregation
+        while True:
+            url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/secure-fl/model-aggregation-completed"
+
+            response = requests.get(
+                url,
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "X-Client-Name": f"{self.client_name}",
+                    "X-Chunk-Total": str(num_chunks),
+                },
+            )
+
+            body = response.json()
+            if body.get("model_aggregation_completed"):
+                logging.info("Aggregation done. Proceeding to download...")
+                break
+            time.sleep(2)
+            logging.info("Waiting for aggregation to be done...")
+
+        # Download the aggregated encrypted model from the aggregation server
+        buf = self.download_model(num_chunks)
 
         aggregated_state_dict = self.__load_encrypted_payload(
             buf.read(), mapping_dict, ignored_dict
@@ -330,7 +381,7 @@ class CkksClient:
         model = self.model.load_state_dict(aggregated_state_dict)
 
         url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/secure-fl/mark-aggregation-download-complete"
-        headers = {"X-Client-Name": f"{self.client_name}"}
-        response = requests.post(url, headers=headers)
+
+        response = requests.post(url, headers={"X-Client-Name": f"{self.client_name}"})
 
         return model
