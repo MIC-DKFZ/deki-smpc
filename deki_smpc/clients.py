@@ -223,7 +223,7 @@ class BgvClient:
         )
 
         # Send the payload to the aggregation server
-        url = "http://localhost:8081/secure-fl/upload"
+        url = f"http://{self.key_aggregation_server_ip}:{self.key_aggregation_server_port}/secure-fl/upload"
 
         headers = {
             "Content-Type": "application/octet-stream",
