@@ -350,7 +350,9 @@ class FedAvgClient:
                     self.public_key[key] = self.public_key[key].cpu()
 
     @__measure_time
-    def __convert_state_dict_to_int(self, state_dict: TensorStateDict) -> TensorStateDict:
+    def __convert_state_dict_to_int(
+        self, state_dict: TensorStateDict
+    ) -> TensorStateDict:
         """Encode float tensors in a state dict into fixed-point integer tensors."""
         for key, val in state_dict.items():
             if key in self.ignore_model_keys:
