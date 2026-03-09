@@ -1,3 +1,5 @@
+"""Client implementation for secure federated model aggregation."""
+
 import io
 import json
 import logging
@@ -27,6 +29,7 @@ TensorStateDict = dict[str, torch.Tensor]
 
 
 class FedAvgClient:
+    """Federated averaging client with key-aggregation-based masking."""
 
     def __init__(
         self,
@@ -39,6 +42,7 @@ class FedAvgClient:
         ignore_model_keys: list[str] | None = None,
         logging_level: int = logging.INFO,
     ) -> None:
+        """Initialize client state, network session, and local cryptographic material."""
         assert num_clients is not None, "Number of clients must be provided"
         assert num_clients >= 3, "Number of clients must be at least 3"
         assert model is not None, "Torch model must be provided"
@@ -136,6 +140,7 @@ class FedAvgClient:
         return cast(Callable[P, R], wrapper)
 
     def _iter_bytes(self, b: bytes, pbar: tqdm[Any]) -> Iterator[memoryview]:
+        """Yield fixed-size chunks from raw bytes while updating a progress bar."""
         mv = memoryview(b)
         total = len(b)
         i = 0
@@ -152,6 +157,7 @@ class FedAvgClient:
         headers: dict[str, str],
         content_iterable: Iterable[bytes | memoryview],
     ) -> None:
+        """Upload a streaming request body using an httpx streaming PUT."""
         # httpx >= 0.28 streaming upload path
         with httpx.Client(timeout=None) as client:
             with client.stream(
@@ -177,6 +183,7 @@ class FedAvgClient:
 
     @__measure_time
     def __upload_model(self, state_dict: TensorStateDict) -> None:
+        """Serialize and upload a masked model state dict to the FL server."""
 
         bio = io.BytesIO()
         torch.save(state_dict, bio, _use_new_zipfile_serialization=True)
@@ -201,6 +208,7 @@ class FedAvgClient:
 
     @__measure_time
     def __download_model(self) -> TensorStateDict:
+        """Download the aggregated masked model state dict from the FL server."""
 
         url = f"{self.url}/secure-fl/download"
         while True:
@@ -244,6 +252,7 @@ class FedAvgClient:
 
     @__measure_time
     def __upload_key(self, state_dict: TensorStateDict, phase: int) -> None:
+        """Serialize and upload a phase-specific key artifact."""
 
         bio = io.BytesIO()
         torch.save(state_dict, bio, _use_new_zipfile_serialization=True)
@@ -269,6 +278,7 @@ class FedAvgClient:
 
     @__measure_time
     def __download_key(self, phase: int) -> TensorStateDict:
+        """Download a phase-specific key artifact from the key server."""
         headers = {
             "X-Client-Name": self.client_name,
             "X-Phase": str(phase),
@@ -341,6 +351,7 @@ class FedAvgClient:
 
     @__measure_time
     def __convert_state_dict_to_int(self, state_dict: TensorStateDict) -> TensorStateDict:
+        """Encode float tensors in a state dict into fixed-point integer tensors."""
         for key, val in state_dict.items():
             if key in self.ignore_model_keys:
                 state_dict[key] = val
@@ -353,6 +364,7 @@ class FedAvgClient:
     def __convert_int_to_state_dict(
         self, int_state_dict: TensorStateDict
     ) -> TensorStateDict:
+        """Decode fixed-point integer tensors back into floating-point tensors."""
         for key, val in int_state_dict.items():
             if key in self.ignore_model_keys:
                 int_state_dict[key] = val
@@ -416,7 +428,7 @@ class FedAvgClient:
 
     @__measure_time
     def __phase_1_routine(self) -> None:
-        # Phase 1: Group key generation
+        """Run phase 1 of key aggregation (group key generation)."""
 
         phase = 1
         first_senders = []
@@ -501,7 +513,7 @@ class FedAvgClient:
 
     @__measure_time
     def __phase_2_routine(self) -> None:
-        # Phase 2:
+        """Run phase 2 key exchanges for configured participants."""
 
         phase = 2
 
@@ -643,6 +655,7 @@ class FedAvgClient:
 
     @__measure_time
     def __key_aggregation_routine(self) -> None:
+        """Run all key-aggregation phases in sequence."""
         logging.info("-- PHASE 1 --")
         self.__phase_1_routine()
 
@@ -676,6 +689,7 @@ class FedAvgClient:
 
     @__measure_time
     def __connect_to_key_aggregation_server(self) -> None:
+        """Register this client with the key aggregation server."""
 
         request_body = KeyClientRegistration(
             ip_address=self.public_facing_ip,
@@ -719,10 +733,12 @@ class FedAvgClient:
 
     @__measure_time
     def prepare_transfer(self) -> None:
+        """Prepare key material required for secure model transfer."""
         self.__key_aggregation_routine()
 
     @__measure_time
     def aggregate(self) -> TensorStateDict:
+        """Perform one secure aggregation round and return averaged model weights."""
 
         self.prepare_transfer()
 

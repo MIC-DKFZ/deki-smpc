@@ -1,9 +1,12 @@
+"""Package setup configuration for deki_smpc."""
+
 from pathlib import Path
 
 from setuptools import find_packages, setup
 
 
 def read_readme() -> str:
+    """Read the project README for package long description."""
     return Path("README.md").read_text(encoding="utf-8")
 
 

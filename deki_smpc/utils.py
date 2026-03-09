@@ -1,3 +1,5 @@
+"""Utility helpers for fixed-point encoding and key mask generation."""
+
 import os
 import secrets
 import string
@@ -9,15 +11,19 @@ TensorStateDict = dict[str, torch.Tensor]
 
 
 class FixedPointConverter:
+    """Encode/decode tensors between floating-point and fixed-point integer forms."""
+
     def __init__(
         self, precision_bits: int = 16, device: str | torch.device = "cpu"
     ) -> None:
+        """Create a converter with a configurable fixed-point precision."""
         self.precision_bits = precision_bits
         self.scale = int(2**precision_bits)
         self.device = device
 
     @staticmethod
     def nearest_int_division(tensor: torch.Tensor, integer: int) -> torch.Tensor:
+        """Divide an integer tensor with nearest rounding and sign correction."""
 
         if integer > 0:
             raise ValueError("integer must be positive, got %s" % integer)
@@ -33,6 +39,7 @@ class FixedPointConverter:
 
     @staticmethod
     def is_float_tensor(tensor: torch.Tensor) -> bool:
+        """Return True when tensor has a floating-point dtype."""
         return torch.is_tensor(tensor) and tensor.dtype in [
             torch.float16,
             torch.float32,
@@ -41,6 +48,7 @@ class FixedPointConverter:
 
     @staticmethod
     def is_int_tensor(tensor: torch.Tensor) -> bool:
+        """Return True when tensor has an integer dtype."""
         return torch.is_tensor(tensor) and tensor.dtype in [
             torch.uint8,
             torch.int8,
@@ -50,12 +58,14 @@ class FixedPointConverter:
         ]
 
     def encode(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Convert a float tensor to fixed-point integer representation."""
         if not FixedPointConverter.is_float_tensor(tensor):
             raise TypeError("Input must be float tensor, got %s." % type(tensor))
 
         return (self.scale * tensor).long()
 
     def decode(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Convert a fixed-point integer tensor back to floating-point."""
         if not FixedPointConverter.is_int_tensor(tensor):
             raise TypeError("Input must be int tensor, got %s." % type(tensor))
 
@@ -74,6 +84,8 @@ class FixedPointConverter:
 
 @dataclass
 class KeyPair:
+    """Container for private and shared key tensors for a given round."""
+
     round: int = 0
     # This is a tensor of same shape as the model parameters
     private_encryption_key: TensorStateDict | None = None
@@ -84,13 +96,17 @@ class KeyPair:
 # Only precompute the keys for the next round
 @dataclass
 class KeyQueue:
+    """Two-slot queue holding current and next key pairs."""
+
     this_round: KeyPair | None = None
     next_round: KeyPair | None = None
 
 
 class SecurityUtils:
+    """Helper functions for generating secrets and masking tensors."""
 
     def __init__(self) -> None:
+        """Initialize an empty key queue."""
         self.key_queue = KeyQueue()
 
     @staticmethod

@@ -1,3 +1,5 @@
+"""Public package exports for deki_smpc."""
+
 from .clients import FedAvgClient
 from .utils import SecurityUtils
 
