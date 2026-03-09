@@ -1,4 +1,11 @@
+from pathlib import Path
+
 from setuptools import find_packages, setup
+
+
+def read_readme() -> str:
+    return Path("README.md").read_text(encoding="utf-8")
+
 
 setup(
     name="deki_smpc",
@@ -6,7 +13,7 @@ setup(
     author="Benjamin Hamm",
     author_email="benjamin.hamm@dkfz-heidelberg.de",
     description="A lightweight client for Secure Multi-Party Computation (SMPC)-based Federated Learning (FL) framework, enabling seamless integration of privacy-preserving aggregation into custom training workflows.",
-    long_description=open("README.md").read(),
+    long_description=read_readme(),
     long_description_content_type="text/markdown",
     packages=find_packages(),
     install_requires=[

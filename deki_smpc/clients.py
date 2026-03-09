@@ -3,9 +3,11 @@ import json
 import logging
 import sys
 import time
+from collections.abc import Callable, Iterable, Iterator
 from copy import deepcopy
 from hashlib import sha256
 from time import sleep
+from typing import Any, ParamSpec, TypeVar, cast
 
 import httpx
 import lz4.frame
@@ -19,6 +21,10 @@ from urllib3.util import Retry
 from .models import KeyClientRegistration
 from .utils import FixedPointConverter, SecurityUtils
 
+P = ParamSpec("P")
+R = TypeVar("R")
+TensorStateDict = dict[str, torch.Tensor]
+
 
 class FedAvgClient:
 
@@ -26,13 +32,13 @@ class FedAvgClient:
         self,
         aggregation_server_ip: str,
         aggregation_server_port: int,
-        num_clients: int = None,
-        preshared_secret: str = None,
-        client_name: str = None,
-        model: Module = None,
-        ignore_model_keys: list = [],
+        num_clients: int | None = None,
+        preshared_secret: str | None = None,
+        client_name: str | None = None,
+        model: Module | None = None,
+        ignore_model_keys: list[str] | None = None,
         logging_level: int = logging.INFO,
-    ):
+    ) -> None:
         assert num_clients is not None, "Number of clients must be provided"
         assert num_clients >= 3, "Number of clients must be at least 3"
         assert model is not None, "Torch model must be provided"
@@ -77,8 +83,10 @@ class FedAvgClient:
         self.__connect_to_key_aggregation_server()
         self.current_fl_round = 0
         self.model = model.float() if model else None
-        self.state_dict = model.state_dict() if model else None
-        self.ignore_model_keys = ignore_model_keys
+        self.state_dict: TensorStateDict | None = model.state_dict() if model else None
+        self.ignore_model_keys: list[str] = (
+            list(ignore_model_keys) if ignore_model_keys else []
+        )
 
         # Check for int tensors in the state_dict (e.g. num batches tracked)
         if self.state_dict is not None:
@@ -95,26 +103,28 @@ class FedAvgClient:
         if len(self.ignore_model_keys) > 0:
             logging.info(f"Ignoring model keys: {self.ignore_model_keys}")
 
-        self.aggregated_state_dict = None
-        self.public_key = (
+        self.aggregated_state_dict: TensorStateDict | None = None
+        self.public_key: TensorStateDict | None = (
             SecurityUtils.dummy_generate_secure_random_mask(self.state_dict)
             if self.state_dict
             else None
         )
-        self.private_key = deepcopy(self.public_key) if self.public_key else None
-        self.secure_random_mask = None
+        self.private_key: TensorStateDict | None = (
+            deepcopy(self.public_key) if self.public_key else None
+        )
+        self.secure_random_mask: TensorStateDict | None = None
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.fpe = FixedPointConverter(device=self.device)
         self.chunk_size = 1024 * 1024  # 1 MB
 
     @staticmethod
-    def __measure_time(func):
+    def __measure_time(func: Callable[P, R]) -> Callable[P, R]:
         """
         Decorator to measure the execution time of a function.
         """
 
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             start_time = time.time()
             result = func(*args, **kwargs)
             end_time = time.time()
@@ -123,9 +133,9 @@ class FedAvgClient:
             )
             return result
 
-        return wrapper
+        return cast(Callable[P, R], wrapper)
 
-    def _iter_bytes(self, b: bytes, pbar: tqdm):
+    def _iter_bytes(self, b: bytes, pbar: tqdm[Any]) -> Iterator[memoryview]:
         mv = memoryview(b)
         total = len(b)
         i = 0
@@ -136,7 +146,12 @@ class FedAvgClient:
             yield chunk
             i = j
 
-    def _stream_upload(self, url: str, headers: dict, content_iterable):
+    def _stream_upload(
+        self,
+        url: str,
+        headers: dict[str, str],
+        content_iterable: Iterable[bytes | memoryview],
+    ) -> None:
         # httpx >= 0.28 streaming upload path
         with httpx.Client(timeout=None) as client:
             with client.stream(
@@ -144,7 +159,12 @@ class FedAvgClient:
             ) as resp:
                 resp.raise_for_status()
 
-    def __measure_request_time(self, request_func, *args, **kwargs):
+    def __measure_request_time(
+        self,
+        request_func: Callable[..., requests.Response],
+        *args: Any,
+        **kwargs: Any,
+    ) -> requests.Response:
         """
         Measure the time taken for a request.
         """
@@ -156,7 +176,7 @@ class FedAvgClient:
         return response
 
     @__measure_time
-    def __upload_model(self, state_dict: dict):
+    def __upload_model(self, state_dict: TensorStateDict) -> None:
 
         bio = io.BytesIO()
         torch.save(state_dict, bio, _use_new_zipfile_serialization=True)
@@ -180,7 +200,7 @@ class FedAvgClient:
         )
 
     @__measure_time
-    def __download_model(self) -> dict:
+    def __download_model(self) -> TensorStateDict:
 
         url = f"{self.url}/secure-fl/download"
         while True:
@@ -211,7 +231,10 @@ class FedAvgClient:
 
             # Rewind and load directly from memory
             buf.seek(0)
-            state_dict = torch.load(buf, map_location="cpu", weights_only=True)
+            state_dict = cast(
+                TensorStateDict,
+                torch.load(buf, map_location="cpu", weights_only=True),
+            )
 
             logging.info(
                 f"Model downloaded to RAM (size={buf.getbuffer().nbytes} bytes)"
@@ -220,7 +243,7 @@ class FedAvgClient:
         return state_dict
 
     @__measure_time
-    def __upload_key(self, state_dict: dict, phase: int):
+    def __upload_key(self, state_dict: TensorStateDict, phase: int) -> None:
 
         bio = io.BytesIO()
         torch.save(state_dict, bio, _use_new_zipfile_serialization=True)
@@ -245,7 +268,7 @@ class FedAvgClient:
         )
 
     @__measure_time
-    def __download_key(self, phase: int) -> dict:
+    def __download_key(self, phase: int) -> TensorStateDict:
         headers = {
             "X-Client-Name": self.client_name,
             "X-Phase": str(phase),
@@ -278,7 +301,9 @@ class FedAvgClient:
 
         # Rewind and load directly from memory
         buf.seek(0)
-        state_dict = torch.load(buf, map_location="cpu", weights_only=True)
+        state_dict = cast(
+            TensorStateDict, torch.load(buf, map_location="cpu", weights_only=True)
+        )
 
         logging.info(
             f"Key downloaded to RAM for {self.client_name} (size={buf.getbuffer().nbytes} bytes)"
@@ -286,7 +311,7 @@ class FedAvgClient:
         return state_dict
 
     @__measure_time
-    def __add_keys(self, downloaded_state_dict: dict):
+    def __add_keys(self, downloaded_state_dict: TensorStateDict) -> None:
         """
         Add the downloaded state_dict values to the existing state_dict values.
         This operation is performed element-wise for each tensor in the state_dict.
@@ -315,7 +340,7 @@ class FedAvgClient:
                     self.public_key[key] = self.public_key[key].cpu()
 
     @__measure_time
-    def __convert_state_dict_to_int(self, state_dict: dict) -> dict:
+    def __convert_state_dict_to_int(self, state_dict: TensorStateDict) -> TensorStateDict:
         for key, val in state_dict.items():
             if key in self.ignore_model_keys:
                 state_dict[key] = val
@@ -325,7 +350,9 @@ class FedAvgClient:
         return state_dict
 
     @__measure_time
-    def __convert_int_to_state_dict(self, int_state_dict: dict) -> dict:
+    def __convert_int_to_state_dict(
+        self, int_state_dict: TensorStateDict
+    ) -> TensorStateDict:
         for key, val in int_state_dict.items():
             if key in self.ignore_model_keys:
                 int_state_dict[key] = val
@@ -343,7 +370,11 @@ class FedAvgClient:
         return int_state_dict
 
     @__measure_time
-    def __shield_key(self, state_dict: dict, secure_random_mask: dict = None):
+    def __shield_key(
+        self,
+        state_dict: TensorStateDict,
+        secure_random_mask: TensorStateDict | None = None,
+    ) -> tuple[TensorStateDict, TensorStateDict]:
         """
         Shield the state_dict by applying a random mask to each tensor.
         The mask is generated using the SecurityUtils class.
@@ -362,13 +393,16 @@ class FedAvgClient:
 
     @__measure_time
     def __unshield_key(
-        self, shielded_state_dict: dict, secure_random_mask: dict = None
-    ):
+        self,
+        shielded_state_dict: TensorStateDict,
+        secure_random_mask: TensorStateDict | None = None,
+    ) -> TensorStateDict:
         """
         Unshield the state_dict by removing the random mask from each tensor.
         The mask is generated using the SecurityUtils class.
         """
-
+        if secure_random_mask is None:
+            raise ValueError("secure_random_mask must be provided")
         for key, _ in shielded_state_dict.items():
             # Ensure both tensors are on the same device
             shielded_state_dict[key] = shielded_state_dict[key].to(self.device)
@@ -381,7 +415,7 @@ class FedAvgClient:
         return self.__convert_int_to_state_dict(shielded_state_dict)
 
     @__measure_time
-    def __phase_1_routine(self):
+    def __phase_1_routine(self) -> None:
         # Phase 1: Group key generation
 
         phase = 1
@@ -466,7 +500,7 @@ class FedAvgClient:
             sleep(1)  # Sleep for a while before checking again
 
     @__measure_time
-    def __phase_2_routine(self):
+    def __phase_2_routine(self) -> None:
         # Phase 2:
 
         phase = 2
@@ -543,7 +577,7 @@ class FedAvgClient:
             sleep(1)  # Sleep for a while before checking again
 
     @__measure_time
-    def __phase_3_routine(self):
+    def __phase_3_routine(self) -> None:
         """
         Phase 3: Final sum upload and download.
         """
@@ -608,7 +642,7 @@ class FedAvgClient:
                 )
 
     @__measure_time
-    def __key_aggregation_routine(self):
+    def __key_aggregation_routine(self) -> None:
         logging.info("-- PHASE 1 --")
         self.__phase_1_routine()
 
@@ -641,7 +675,7 @@ class FedAvgClient:
         self.__phase_3_routine()
 
     @__measure_time
-    def __connect_to_key_aggregation_server(self):
+    def __connect_to_key_aggregation_server(self) -> None:
 
         request_body = KeyClientRegistration(
             ip_address=self.public_facing_ip,
@@ -661,7 +695,7 @@ class FedAvgClient:
             )
 
     @__measure_time
-    def __serialize_and_compress(self, state_dict: dict) -> io.BytesIO:
+    def __serialize_and_compress(self, state_dict: TensorStateDict) -> io.BytesIO:
         """
         Serialize and compress the state_dict.
         """
@@ -672,21 +706,23 @@ class FedAvgClient:
         return buffer
 
     @__measure_time
-    def __decompress_and_load(self, compressed_data: bytes) -> dict:
+    def __decompress_and_load(self, compressed_data: bytes) -> TensorStateDict:
         """
         Decompress and load the state_dict.
         """
         buffer = io.BytesIO(compressed_data)
         with lz4.frame.open(buffer, mode="rb") as f:
-            state_dict = torch.load(f, map_location="cpu", weights_only=True)
+            state_dict = cast(
+                TensorStateDict, torch.load(f, map_location="cpu", weights_only=True)
+            )
         return state_dict
 
     @__measure_time
-    def prepare_transfer(self):
+    def prepare_transfer(self) -> None:
         self.__key_aggregation_routine()
 
     @__measure_time
-    def aggregate(self) -> Module:
+    def aggregate(self) -> TensorStateDict:
 
         self.prepare_transfer()
 

@@ -5,9 +5,13 @@ from dataclasses import dataclass
 
 import torch
 
+TensorStateDict = dict[str, torch.Tensor]
+
 
 class FixedPointConverter:
-    def __init__(self, precision_bits=16, device="cpu"):
+    def __init__(
+        self, precision_bits: int = 16, device: str | torch.device = "cpu"
+    ) -> None:
         self.precision_bits = precision_bits
         self.scale = int(2**precision_bits)
         self.device = device
@@ -72,21 +76,21 @@ class FixedPointConverter:
 class KeyPair:
     round: int = 0
     # This is a tensor of same shape as the model parameters
-    private_encryption_key: dict = None
+    private_encryption_key: TensorStateDict | None = None
     # This is a tensor of same shape as the model parameters
-    shared_decryption_key: dict = None
+    shared_decryption_key: TensorStateDict | None = None
 
 
 # Only precompute the keys for the next round
 @dataclass
 class KeyQueue:
-    this_round: KeyPair = None
-    next_round: KeyPair = None
+    this_round: KeyPair | None = None
+    next_round: KeyPair | None = None
 
 
 class SecurityUtils:
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.key_queue = KeyQueue()
 
     @staticmethod
@@ -119,8 +123,8 @@ class SecurityUtils:
 
     @staticmethod
     def generate_secure_random_mask(
-        state_dict: dict[str, torch.Tensor],
-    ) -> dict[str, torch.Tensor]:
+        state_dict: TensorStateDict,
+    ) -> TensorStateDict:
         """
         Generates a dictionary of secure random tensors with the same shape
         as the parameters in the given state_dict using the secrets module.
@@ -129,7 +133,7 @@ class SecurityUtils:
         total_i32 = sum(p.numel() for p in state_dict.values())
         buf = bytearray(os.urandom(total_i32 * 4))  # writable for frombuffer
 
-        mask = {}
+        mask: TensorStateDict = {}
         offset = 0
         for name, p in state_dict.items():
             n = p.numel()
@@ -145,13 +149,13 @@ class SecurityUtils:
 
     @staticmethod
     def dummy_generate_secure_random_mask(
-        state_dict: dict[str, torch.Tensor],
-    ) -> dict[str, torch.Tensor]:
+        state_dict: TensorStateDict,
+    ) -> TensorStateDict:
         """
         Generates a dictionary of tensors with ones with the same shape
         as the parameters in the given state_dict.
         """
-        mask = {}
+        mask: TensorStateDict = {}
         for name, param in state_dict.items():
             mask[name] = torch.ones_like(param)
         return mask
