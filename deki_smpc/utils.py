@@ -14,7 +14,7 @@ class FixedPointConverter:
     """Encode/decode tensors between floating-point and fixed-point integer forms."""
 
     def __init__(
-        self, precision_bits: int = 16, device: str | torch.device = "cpu"
+        self, precision_bits: int = 24, device: str | torch.device = "cpu"
     ) -> None:
         """Create a converter with a configurable fixed-point precision."""
         self.precision_bits = precision_bits
@@ -25,7 +25,7 @@ class FixedPointConverter:
     def nearest_int_division(tensor: torch.Tensor, integer: int) -> torch.Tensor:
         """Divide an integer tensor with nearest rounding and sign correction."""
 
-        if integer > 0:
+        if integer <= 0:
             raise ValueError("integer must be positive, got %s" % integer)
 
         if not FixedPointConverter.is_int_tensor(tensor):
@@ -62,24 +62,14 @@ class FixedPointConverter:
         if not FixedPointConverter.is_float_tensor(tensor):
             raise TypeError("Input must be float tensor, got %s." % type(tensor))
 
-        return (self.scale * tensor).long()
+        return (tensor.double() * self.scale).round().long()
 
     def decode(self, tensor: torch.Tensor) -> torch.Tensor:
         """Convert a fixed-point integer tensor back to floating-point."""
         if not FixedPointConverter.is_int_tensor(tensor):
             raise TypeError("Input must be int tensor, got %s." % type(tensor))
 
-        if self.scale > 1:
-            cor = (tensor < 0).long()
-            div = tensor.div(self.scale - cor, rounding_mode="floor")
-            rem = tensor % self.scale
-            rem += (rem == 0).long() * self.scale * cor
-
-            tensor = div.float() + rem.float() / self.scale
-        else:
-            tensor = FixedPointConverter.nearest_int_division(tensor, self.scale)
-
-        return tensor.data
+        return (tensor.double() / self.scale).float()
 
 
 @dataclass

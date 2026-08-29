@@ -1,5 +1,7 @@
 """Client implementation for secure federated model aggregation."""
 
+from __future__ import annotations
+
 import io
 import json
 import logging
@@ -464,6 +466,7 @@ class FedAvgClient:
             response = self.__measure_request_time(
                 lambda session, **kwargs: session.get(**kwargs),
                 url=f"{self.url}/key-aggregation/aggregation/phase/{phase}/check_for_task",
+                headers={"Content-Type": "application/json"},
                 data=json.dumps(
                     {
                         "client_name": self.client_name,
@@ -538,6 +541,7 @@ class FedAvgClient:
             response = self.__measure_request_time(
                 lambda session, **kwargs: session.get(**kwargs),
                 url=f"{self.url}/key-aggregation/aggregation/phase/{phase}/check_for_task",
+                headers={"Content-Type": "application/json"},
                 data=json.dumps(
                     {
                         "client_name": self.client_name,
@@ -702,6 +706,7 @@ class FedAvgClient:
         response = self.__measure_request_time(
             lambda session, **kwargs: session.post(**kwargs),
             url=f"{self.url}/key-aggregation/register",
+            headers={"Content-Type": "application/json"},
             data=json.dumps(request_body.dict()),
         )
 
@@ -753,6 +758,7 @@ class FedAvgClient:
         response = self.__measure_request_time(
             lambda session, **kwargs: session.post(**kwargs),
             url=f"{self.url}/key-aggregation/aggregation/finished",
+            headers={"Content-Type": "application/json"},
             data=json.dumps(
                 {
                     "client_name": self.client_name,
