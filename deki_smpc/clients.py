@@ -8,7 +8,7 @@ import logging
 import sys
 import time
 from collections.abc import Callable, Iterable, Iterator
-from copy import deepcopy
+from copy import copy, deepcopy
 from hashlib import sha256
 from time import sleep
 from typing import Any, ParamSpec, TypeVar, cast
@@ -43,6 +43,7 @@ class FedAvgClient:
         model: Module | None = None,
         ignore_model_keys: list[str] | None = None,
         logging_level: int = logging.INFO,
+        precision_bits: int = 24,
     ) -> None:
         """Initialize client state, network session, and local cryptographic material."""
         assert num_clients is not None, "Number of clients must be provided"
@@ -69,6 +70,12 @@ class FedAvgClient:
         self.num_clients = num_clients
         self.preshared_secret = sha256(preshared_secret.encode()).hexdigest()
         self.client_name = client_name
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.fpe = FixedPointConverter(
+            precision_bits=precision_bits,
+            device=self.device,
+            max_aggregation_terms=self.num_clients,
+        )
         self.public_facing_ip = requests.get(
             "https://api.ipify.org/?format=json"
         ).json()["ip"]
@@ -120,8 +127,6 @@ class FedAvgClient:
         )
         self.secure_random_mask: TensorStateDict | None = None
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.fpe = FixedPointConverter(device=self.device)
         self.chunk_size = 1024 * 1024  # 1 MB
 
     @staticmethod
@@ -356,13 +361,28 @@ class FedAvgClient:
         self, state_dict: TensorStateDict
     ) -> TensorStateDict:
         """Encode float tensors in a state dict into fixed-point integer tensors."""
+        # Work on a shallow copy so an encoding error cannot leave the caller's
+        # model half-converted. ``copy`` also preserves PyTorch state-dict metadata.
+        converted_state_dict: TensorStateDict = copy(state_dict)
         for key, val in state_dict.items():
             if key in self.ignore_model_keys:
-                state_dict[key] = val
+                if FixedPointConverter.is_int_tensor(val):
+                    converted_state_dict[key] = self.fpe.normalize_integer(
+                        val, tensor_name=key
+                    )
+                elif FixedPointConverter.is_float_tensor(val):
+                    if not bool(torch.isfinite(val).all().item()):
+                        raise ValueError(
+                            f"Cannot aggregate tensor {key!r}: "
+                            "values must all be finite"
+                        )
+                    converted_state_dict[key] = val
+                else:
+                    converted_state_dict[key] = val
                 continue
-            state_dict[key] = self.fpe.encode(val)
+            converted_state_dict[key] = self.fpe.encode(val, tensor_name=key)
 
-        return state_dict
+        return converted_state_dict
 
     @__measure_time
     def __convert_int_to_state_dict(
@@ -385,6 +405,36 @@ class FedAvgClient:
 
         return int_state_dict
 
+    def __normalize_mask(
+        self, mask: TensorStateDict, *, context: str
+    ) -> TensorStateDict:
+        """Normalize fixed-point mask tensors to the int64 ring."""
+        converted_mask: TensorStateDict = copy(mask)
+        for key, val in mask.items():
+            if key in self.ignore_model_keys and FixedPointConverter.is_float_tensor(
+                val
+            ):
+                if not bool(torch.isfinite(val).all().item()):
+                    raise ValueError(
+                        f"Cannot use mask tensor {context}.{key!s}: "
+                        "values must all be finite"
+                    )
+                converted_mask[key] = val
+            elif FixedPointConverter.is_float_tensor(val):
+                converted_mask[key] = self.fpe.encode(
+                    val, tensor_name=f"{context}.{key}"
+                )
+            elif FixedPointConverter.is_int_tensor(val):
+                # Integer masks are ring elements, not model values. Their
+                # wraparound is intentional and must not use the model bound.
+                converted_mask[key] = val.to(dtype=torch.int64)
+            else:
+                raise TypeError(
+                    f"Mask tensor {context}.{key!s} must have a numeric dtype, "
+                    f"got {val.dtype}"
+                )
+        return converted_mask
+
     @__measure_time
     def __shield_key(
         self,
@@ -399,8 +449,11 @@ class FedAvgClient:
 
         if secure_random_mask is None:
             secure_random_mask = SecurityUtils.generate_secure_random_mask(state_dict)
+        secure_random_mask = self.__normalize_mask(secure_random_mask, context="shield")
 
         for key, _ in state_dict.items():
+            if key not in secure_random_mask:
+                raise KeyError(f"Mask is missing tensor {key!r}")
             state_dict[key] = (state_dict[key] + secure_random_mask[key]).to(
                 self.device
             )
@@ -419,9 +472,19 @@ class FedAvgClient:
         """
         if secure_random_mask is None:
             raise ValueError("secure_random_mask must be provided")
+        secure_random_mask = self.__normalize_mask(
+            secure_random_mask, context="unshield"
+        )
         for key, _ in shielded_state_dict.items():
+            if key not in secure_random_mask:
+                raise KeyError(f"Mask is missing tensor {key!r}")
             # Ensure both tensors are on the same device
-            shielded_state_dict[key] = shielded_state_dict[key].to(self.device)
+            if FixedPointConverter.is_int_tensor(shielded_state_dict[key]):
+                shielded_state_dict[key] = shielded_state_dict[key].to(
+                    dtype=torch.int64, device=self.device
+                )
+            else:
+                shielded_state_dict[key] = shielded_state_dict[key].to(self.device)
             secure_random_mask[key] = secure_random_mask[key].to(self.device)
 
             shielded_state_dict[key] = (

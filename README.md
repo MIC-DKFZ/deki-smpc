@@ -73,6 +73,7 @@ Main constructor arguments:
 - `model: torch.nn.Module`: Local model whose `state_dict` will be aggregated.
 - `ignore_model_keys: list[str] | None`: Optional keys to exclude from conversion/aggregation.
 - `logging_level: int`: Standard Python logging level.
+- `precision_bits: int`: Fixed-point precision shared by every client (default: `24`).
 
 ### Methods
 
@@ -98,6 +99,11 @@ Main constructor arguments:
 
 - Model key mismatches
   Ensure identical model architecture/state keys on all participants, or explicitly use `ignore_model_keys`.
+
+- Fixed-point overflow or non-finite value errors
+  Check the named model tensor for unstable training values. If finite weights are
+  genuinely too large, configure a lower `precision_bits` value consistently on
+  every client in the federation; values are never silently clipped.
 
 ## Why deki-smpc
 
