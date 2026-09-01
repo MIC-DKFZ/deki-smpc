@@ -79,7 +79,7 @@ it back into PyTorch tensors.
 
 - Python 3.12 or newer
 - PyTorch 2.13 or newer
-- A running deki-smpc v1 server
+- A running [deki-smpc v1 server](https://github.com/MIC-DKFZ/deki-smpc-server)
 - At least three enrolled participants using the same model schema
 
 Install the client from a checkout:
