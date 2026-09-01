@@ -1,7 +1,6 @@
-"""Public package exports for deki_smpc."""
+"""Version 1 secure-aggregation protocol primitives."""
 
-from .clients import FedAvgClient
-from .protocol.errors import (
+from .errors import (
     AggregateIntegrityError,
     ArtifactValidationError,
     AuthenticationError,
@@ -14,18 +13,24 @@ from .protocol.errors import (
     RoundTimeoutError,
     TransportError,
 )
+from .models import PROTOCOL_VERSION, AggregationPolicy, RoundState
+from .schema import ModelSchema, TensorPolicy
 
-__all__: list[str] = [
+__all__ = [
+    "PROTOCOL_VERSION",
     "AggregateIntegrityError",
+    "AggregationPolicy",
     "ArtifactValidationError",
     "AuthenticationError",
     "ConfigurationError",
     "DekiSMPCError",
-    "FedAvgClient",
+    "ModelSchema",
     "ProtocolVersionError",
     "RoundConflictError",
     "RoundExpiredError",
     "RoundFailedError",
+    "RoundState",
     "RoundTimeoutError",
+    "TensorPolicy",
     "TransportError",
 ]
