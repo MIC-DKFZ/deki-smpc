@@ -2,13 +2,6 @@
 
 This file records released changes to `deki-smpc`.
 
-## [Unreleased]
-
-### Changed
-
-- Linked the README server requirement to the companion `deki-smpc-server`
-  repository.
-
 ## [1.0.0] - 2026-09-01
 
 Initial deki-smpc v1 release.
