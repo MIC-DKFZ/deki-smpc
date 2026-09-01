@@ -4,6 +4,15 @@ This file records released changes to `deki-smpc`.
 
 ## [Unreleased]
 
+### Changed
+
+- Linked the README server requirement to the companion `deki-smpc-server`
+  repository.
+
+## [1.0.0] - 2026-09-01
+
+Initial deki-smpc v1 release.
+
 ### Fixed
 
 - Derived the participant count from the locally pinned identity manifest
@@ -20,10 +29,6 @@ This file records released changes to `deki-smpc`.
 - Reworked the README around a high-level introduction, visual overview, and streamlined getting-started flow.
 - Raised the minimum supported Python version to 3.12.
 - Made Black the authoritative formatter, with isort running before it through pre-commit.
-
-## [1.0.0] - 2026-08-30
-
-Initial deki-smpc v1 release.
 
 ### Protocol
 
