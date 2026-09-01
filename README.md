@@ -1,115 +1,222 @@
+<div align="center">
+
 # deki-smpc
 
-`deki-smpc` is a lightweight Python client for secure federated averaging using SMPC-style masking.
-It is designed to integrate into existing training loops (PyTorch, nnU-Net, MONAI, or custom code) with minimal workflow changes.
+### Secure model aggregation for collaborative learning across organizations
 
-## What It Solves
+Train together. Keep each participant's model update private. Verify the result
+before using it.
 
-- Keep your local training loop unchanged.
-- Add secure aggregation with one client object and one aggregation call.
-- Exchange keys and aggregate model weights through a dedicated server stack.
+<a href="https://www.python.org/">
+  <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&amp;logoColor=white">
+</a>
+<a href="https://pytorch.org/">
+  <img alt="PyTorch 2.13+" src="https://img.shields.io/badge/PyTorch-2.13%2B-EE4C2C?logo=pytorch&amp;logoColor=white">
+</a>
+<a href="docs/protocol-v1.md">
+  <img alt="Protocol v1" src="https://img.shields.io/badge/protocol-v1-6C63FF">
+</a>
+<a href="LICENSE">
+  <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green.svg">
+</a>
 
-## Quick Start
+</div>
 
-### 1. Requirements
+---
 
-- Python `>=3.11`
-- A running [deki-smpc-server](https://github.com/MIC-DKFZ/deki-smpc-server)
-- Same model architecture on all participating clients
-- Shared preshared secret across clients (meeting complexity requirements)
+deki-smpc brings secure multi-party computation to **cross-silo federated
+learning**. It lets a fixed group of organizations—such as hospitals or
+research institutes—combine locally trained PyTorch models without sending
+their individual model updates to the aggregation service in the clear.
 
-### 2. Install
+The integration point is intentionally small: each participant hands its
+locally trained model to `FedAvgClient`, waits for the other participants, and
+receives a new, verified aggregate state dictionary.
+
+> deki-smpc protects the aggregation step. Training data stays at its source, model
+> updates are masked before upload, and every participant independently checks
+> the combined result.
+
+## Overview
+
+In ordinary federated learning, data remains local but individual model updates
+may still be visible to the central coordinator. deki-smpc closes that gap with a
+round-based secure aggregation protocol built for stable groups of known
+participants.
+
+```mermaid
+flowchart LR
+    A[Site A<br/>local training] -->|masked update| S
+    B[Site B<br/>local training] -->|masked update| S
+    C[Site C<br/>local training] -->|masked update| S
+    S[deki-smpc server<br/>coordinate + aggregate]
+    S -->|verified aggregate| A
+    S -->|verified aggregate| B
+    S -->|verified aggregate| C
+```
+
+During each round, the clients create fresh shared masking material. The masks
+hide every individual upload but cancel when all updates are added together.
+The server publishes the sum, and clients verify its integrity before turning
+it back into PyTorch tensors.
+
+### Why deki-smpc?
+
+- **Private individual updates** — the service stores and processes masked
+  model artifacts, not clear participant updates.
+- **Familiar PyTorch workflow** — aggregation returns a state dictionary that
+  can be loaded with `model.load_state_dict(...)`.
+- **Client-side trust** — participants authenticate one another and reject a
+  modified or malformed aggregate.
+- **Round-local security** — keys, masks, and integrity material are freshly
+  generated for every aggregation round.
+- **Production-minded behavior** — HTTPS by default, bounded retries, one
+  caller-controlled deadline, cancellation, and typed errors.
+
+## Getting started
+
+### Requirements
+
+- Python 3.12 or newer
+- PyTorch 2.13 or newer
+- A running deki-smpc v1 server
+- At least three enrolled participants using the same model schema
+
+Install the client from a checkout:
 
 ```bash
-git clone https://github.com/MIC-DKFZ/deki-smpc
-cd deki-smpc
-pip install -e .
+python -m pip install .
 ```
 
-### 3. Minimal Usage
+For development and testing:
+
+```bash
+python -m pip install -e '.[test]'
+```
+
+### Aggregate a model
+
+The federation operator creates a round and shares its `round_id` with every
+participating site. Each site then calls the same client API with its locally
+trained model:
 
 ```python
-import torch
+from datetime import timedelta
+
 from deki_smpc import FedAvgClient
 
-model = ...  # your local torch.nn.Module
+model = ...  # your locally trained torch.nn.Module
 
-client = FedAvgClient(
-    aggregation_server_ip="127.0.0.1",
-    aggregation_server_port=8080,
-    num_clients=4,
-    preshared_secret="my_secure_presHared_secret_123!",
-    client_name="site_a",  # must be unique per client
-    model=model,
-)
+with FedAvgClient(
+    base_url="https://aggregation.example.org",
+    federation_id="hospital-network",
+    client_id="site-a",
+    auth_token=site_bearer_token,
+    identity_private_key=site_private_key_base64,
+    trusted_signing_keys={
+        "site-a": site_a_public_key_base64,
+        "site-b": site_b_public_key_base64,
+        "site-c": site_c_public_key_base64,
+    },
+    ca_bundle="/etc/ssl/certs/federation-ca.pem",
+) as client:
+    aggregate = client.aggregate(
+        model=model,
+        round_id=round_id,
+        timeout=timedelta(minutes=30),
+    )
 
-# Returns aggregated model weights as a state_dict
-aggregated_state_dict = client.aggregate()
-model.load_state_dict(aggregated_state_dict)
+model.load_state_dict(aggregate)
 ```
 
-## Integration Pattern
+The input model is never mutated. deki-smpc returns a new state dictionary only
+after its schema, artifact, digest, and aggregate integrity have been checked.
 
-Use this package at aggregation points in your existing training loop:
+Want to see the complete workflow first? Follow the
+**[three-site MNIST walkthrough](docs/getting-started-mnist.md)** to provision a
+local federation, train at three participants, and run a real secure
+aggregation round.
 
-1. Train locally for one round/epoch window.
-2. Call `client.aggregate()`.
-3. Load returned weights via `model.load_state_dict(...)`.
-4. Continue local training.
+## Protocol at a glance
 
-This lets you control local optimization logic while delegating secure cross-client aggregation.
+| | deki-smpc v1 |
+| --- | --- |
+| Designed for | Cross-silo federated learning with known participants |
+| Participants | A complete, fixed set of at least three sites |
+| Aggregation | Equal-weight mean or sum |
+| Individual uploads | Pairwise-masked `int64` tensors |
+| Result | Verified PyTorch state dictionary at every participant |
+| Model artifacts | Safetensors only |
+| Transport | HTTPS by default |
 
-## API Reference
+### Tensor behavior
 
-### `FedAvgClient(...)`
+deki-smpc chooses sensible defaults for a PyTorch state dictionary: floating-point
+tensors are averaged, while integer tensors stay local. Individual tensors can
+opt into a different policy when needed.
 
-Main constructor arguments:
+| Policy | Behavior |
+| --- | --- |
+| `MEAN` | Equal-weight mean across all participants |
+| `SUM` | Sum across all participants |
+| `KEEP_LOCAL` | Preserve that site's local value; never upload it |
 
-- `aggregation_server_ip: str`: Host/IP of the aggregation service.
-- `aggregation_server_port: int`: Port of the aggregation service.
-- `num_clients: int`: Number of expected participants (must be `>= 3`).
-- `preshared_secret: str`: Shared secret used for registration/auth checks.
-- `client_name: str`: Unique identifier of this client instance.
-- `model: torch.nn.Module`: Local model whose `state_dict` will be aggregated.
-- `ignore_model_keys: list[str] | None`: Optional keys to exclude from conversion/aggregation.
-- `logging_level: int`: Standard Python logging level.
-- `precision_bits: int`: Fixed-point precision shared by every client (default: `24`).
+```python
+aggregate = client.aggregate(
+    model=model,
+    round_id=round_id,
+    tensor_policies={"running_total": "SUM"},
+)
+```
 
-### Methods
+Every participant must use the same ordered model schema, precision, policies,
+and participant manifest. A mismatch ends the round with a typed protocol
+error.
 
-- `prepare_transfer() -> None`: Runs key aggregation phases only.
-- `aggregate() -> dict[str, torch.Tensor]`: Executes secure aggregation and returns averaged weights.
+## Client and server
 
-## Security Notes
+deki-smpc is split into two focused repositories:
 
-- This client masks model parameters before transfer and coordinates multi-phase key aggregation.
-- It helps protect individual client updates during aggregation, but does not replace end-to-end operational security.
-- Use secure networking and secret management in production (private network, TLS/termination, secret rotation, access control).
+| Repository | For | Responsibility |
+| --- | --- | --- |
+| **`deki-smpc`** (this repository) | Participating sites | Protect updates and verify results |
+| **`deki-smpc-server`** | Service operators | Coordinate rounds and publish aggregates |
 
-## Troubleshooting
+The server is deliberately not trusted with individual clear updates. It does
+learn the final aggregate, which is the intended output of the protocol.
 
-- `AssertionError: Number of clients must be at least 3`
-  Set `num_clients` to the real participant count and keep it consistent across clients.
+## Documentation
 
-- Stuck waiting/polling
-  Confirm all clients are online, registered with unique `client_name`, and connected to the same server instance.
+- **[End-to-end MNIST tutorial](docs/getting-started-mnist.md)** — run a full
+  three-participant federation locally
+- **[Client API](docs/client-api.md)** — configuration, callbacks, policies,
+  and errors
+- **[Security model](docs/security-model.md)** — guarantees, assumptions, and
+  trust boundaries
+- **[Protocol v1](docs/protocol-v1.md)** — cryptographic and arithmetic design
+- **[Wire format v1](docs/wire-format-v1.md)** — canonical HTTP and artifact
+  contract
+- **[Development](docs/development.md)** — tests, tooling, and local validation
+- **[Changelog](CHANGELOG.md)** — releases and notable changes
 
-- Secret validation failures
-  Ensure the preshared secret matches on all clients and satisfies minimum complexity requirements.
+## Scope and security
 
-- Model key mismatches
-  Ensure identical model architecture/state keys on all participants, or explicitly use `ignore_model_keys`.
-
-- Fixed-point overflow or non-finite value errors
-  Check the named model tensor for unstable training values. If finite weights are
-  genuinely too large, configure a lower `precision_bits` value consistently on
-  every client in the federation; values are never silently clipped.
-
-## Why deki-smpc
-
-Most FL frameworks impose orchestration patterns.
-`deki-smpc` focuses on secure aggregation while letting you keep your existing training code and control flow.
+deki-smpc v1 favors a simple, auditable protocol for stable federations. All
+committed participants must complete the round; a dropout causes the round to
+expire or be aborted. Aggregation is equal-weight, and input quality or model
+poisoning remains a federation-governance concern. See the
+[security model](docs/security-model.md) for the precise guarantees and
+non-goals.
 
 ## Citation
 
-Hamm, B., Kirchhoff, Y., Rokuss, M., Schader, P., Neher, P., Parampottupadam, S., Floca, R., Maier-Hein, K. (2025). Efficient Privacy-Preserving Medical Cross-Silo Federated Learning. https://doi.org/10.36227/techrxiv.174650601.13181048/v1
+If deki-smpc supports your research, please cite:
+
+> Hamm, B., Kirchhoff, Y., Rokuss, M., Schader, P., Neher, P.,
+> Parampottupadam, S., Floca, R., & Maier-Hein, K. (2025). *Efficient
+> Privacy-Preserving Medical Cross-Silo Federated Learning*.
+> <https://doi.org/10.36227/techrxiv.174650601.13181048/v1>
+
+## License
+
+deki-smpc is distributed under the terms of the [MIT License](LICENSE).

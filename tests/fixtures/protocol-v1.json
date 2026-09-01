@@ -1,0 +1,21 @@
+{
+  "protocol_version": "1.0",
+  "federation_id": "fixture-federation",
+  "round_id": "00000000-0000-0000-0000-000000000001",
+  "participant_manifest_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+  "integrity_seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "schema": {
+    "aggregation_policy": "EQUAL_WEIGHTED",
+    "entries": [{"dtype": "float32", "name": "weight", "policy": "MEAN", "shape": [2]}],
+    "precision_bits": 8
+  },
+  "model_schema_hash": "b571deab80b4c1e2974b75811d754e93010d93419d65ffa683549cfedee9760d",
+  "clients": [
+    {"client_id": "client-1", "update": [1.25, -2.0], "encoded": [320, -512], "development_mask": [10, -20], "masked": [330, -532], "q": 1, "tag": "3033d883167fd4596a1260dd593e389b"},
+    {"client_id": "client-2", "update": [0.5, 4.0], "encoded": [128, 1024], "development_mask": [-3, 5], "masked": [125, 1029], "q": 2, "tag": "1a80f1ba994d004601ffb539509b0000"},
+    {"client_id": "client-3", "update": [-1.0, 0.25], "encoded": [-256, 64], "development_mask": [-7, 15], "masked": [-263, 79], "q": 3, "tag": "2f681729656a75eed683726fb3f9a119"}
+  ],
+  "aggregate_encoded": [192, 576],
+  "aggregate_tag": "7a1ce16715374a8e429588865dd2d9b4",
+  "decoded_average": [0.25, 0.75]
+}
