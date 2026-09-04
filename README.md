@@ -46,18 +46,10 @@ participants.
 
 ```mermaid
 flowchart LR
-    subgraph G1[parallel group 1]
-      A[Site A] --> B[Site B] --> C[Site C]
-    end
-    subgraph G2[parallel group 2]
-      D[Site D] --> E[Site E] --> F[Site F]
-    end
-    C --> T[binary key tree]
-    F --> T
-    T --> K[group-encrypted aggregate key]
-    A & B & C & D & E & F -->|masked updates| S[aggregation server]
-    K --> A & B & C & D & E & F
-    S -->|still-masked aggregate| A & B & C & D & E & F
+    P[Participants] -->|masked updates| S[Server aggregation]
+    P --> K[Binary key tree]
+    S --> V[Local unmask and verification]
+    K --> V
 ```
 
 Protocol `1.1` builds fresh private model keys in parallel blinded groups,
