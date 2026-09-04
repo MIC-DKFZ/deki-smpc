@@ -25,8 +25,8 @@ before using it.
 ---
 
 deki-smpc brings secure multi-party computation to **cross-silo federated
-learning**. It lets a fixed group of organizations—such as hospitals or
-research institutes—combine locally trained PyTorch models without sending
+learning**. It lets a fixed group of organizations, such as hospitals or
+research institutes, combine locally trained PyTorch models without sending
 their individual model updates to the aggregation service in the clear.
 
 The integration point is intentionally small: each participant hands its
@@ -67,15 +67,15 @@ the clear aggregate. Each client unmasks and verifies it locally.
 
 ### Why deki-smpc?
 
-- **Private individual updates** — the service stores and processes masked
+- **Private individual updates:** the service stores and processes masked
   model artifacts, not clear participant updates.
-- **Familiar PyTorch workflow** — aggregation returns a state dictionary that
+- **Familiar PyTorch workflow:** aggregation returns a state dictionary that
   can be loaded with `model.load_state_dict(...)`.
-- **Client-side trust** — participants authenticate one another and reject a
+- **Client-side trust:** participants authenticate one another and reject a
   modified or malformed aggregate.
-- **Round-local security** — keys, masks, and integrity material are freshly
+- **Round-local security:** keys, masks, and integrity material are freshly
   generated for every aggregation round.
-- **Production-minded behavior** — HTTPS by default, bounded retries, one
+- **Production-minded behavior:** HTTPS by default, bounded retries, one
   caller-controlled deadline, cancellation, and typed errors.
 
 ## Getting started
@@ -192,17 +192,17 @@ protocol `1.1`, it also does not learn the final clear aggregate.
 
 ## Documentation
 
-- **[End-to-end MNIST tutorial](docs/getting-started-mnist.md)** — run a full
+- **[End-to-end MNIST tutorial](docs/getting-started-mnist.md):** run a full
   three-participant federation locally
-- **[Client API](docs/client-api.md)** — configuration, callbacks, policies,
+- **[Client API](docs/client-api.md):** configuration, callbacks, policies,
   and errors
-- **[Security model](docs/security-model.md)** — guarantees, assumptions, and
+- **[Security model](docs/security-model.md):** guarantees, assumptions, and
   trust boundaries
-- **[Protocol 1.1](docs/protocol-v1.1.md)** — hardened group and binary-key-tree design
-- **[Wire format 1.1](docs/wire-format-v1.1.md)** — additive tree resources and artifacts
-- **[Development](docs/development.md)** — tests, tooling, and local validation
-- **[1.0.1 benchmark](docs/benchmark-1.0.1.md)** — reproducible observed preparation work and traffic model
-- **[Changelog](CHANGELOG.md)** — releases and notable changes
+- **[Protocol 1.1](docs/protocol-v1.1.md):** hardened group and binary-key-tree design
+- **[Wire format 1.1](docs/wire-format-v1.1.md):** additive tree resources and artifacts
+- **[Development](docs/development.md):** tests, tooling, and local validation
+- **[1.0.1 benchmark](docs/benchmark-1.0.1.md):** reproducible observed preparation work and traffic model
+- **[Changelog](CHANGELOG.md):** releases and notable changes
 
 ## Scope and security
 

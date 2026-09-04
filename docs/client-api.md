@@ -84,7 +84,7 @@ receipt. The returned opaque handle is bound to that client, round, protocol,
 schema, policies, and the original absolute deadline.
 
 The handle is non-serializable, supports `with`, and is consumed as soon as an
-aggregation attempt starts—even if validation then fails. Closing an unused
+aggregation attempt starts, even if validation then fails. Closing an unused
 handle consumes its key material. `aggregate(..., prepared_round=handle)` does
 not reset the preparation deadline.
 
