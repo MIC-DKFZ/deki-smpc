@@ -2,7 +2,7 @@
 
 This file records released changes to `deki-smpc`.
 
-## [Unreleased]
+## [1.0.1] - 2026-09-04
 
 ### Protocol and security
 
