@@ -13,11 +13,19 @@ from .errors import (
     RoundTimeoutError,
     TransportError,
 )
-from .models import PROTOCOL_VERSION, AggregationPolicy, RoundState
+from .models import (
+    LEGACY_PROTOCOL_VERSION,
+    PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
+    AggregationPolicy,
+    RoundState,
+)
 from .schema import ModelSchema, TensorPolicy
 
 __all__ = [
+    "LEGACY_PROTOCOL_VERSION",
     "PROTOCOL_VERSION",
+    "SUPPORTED_PROTOCOL_VERSIONS",
     "AggregateIntegrityError",
     "AggregationPolicy",
     "ArtifactValidationError",

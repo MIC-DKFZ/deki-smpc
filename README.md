@@ -13,8 +13,8 @@ before using it.
 <a href="https://pytorch.org/">
   <img alt="PyTorch 2.13+" src="https://img.shields.io/badge/PyTorch-2.13%2B-EE4C2C?logo=pytorch&amp;logoColor=white">
 </a>
-<a href="docs/protocol-v1.md">
-  <img alt="Protocol v1" src="https://img.shields.io/badge/protocol-v1-6C63FF">
+<a href="docs/protocol-v1.1.md">
+  <img alt="Protocol 1.1" src="https://img.shields.io/badge/protocol-1.1-6C63FF">
 </a>
 <a href="LICENSE">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green.svg">
@@ -25,8 +25,8 @@ before using it.
 ---
 
 deki-smpc brings secure multi-party computation to **cross-silo federated
-learning**. It lets a fixed group of organizations—such as hospitals or
-research institutes—combine locally trained PyTorch models without sending
+learning**. It lets a fixed group of organizations, such as hospitals or
+research institutes, combine locally trained PyTorch models without sending
 their individual model updates to the aggregation service in the clear.
 
 The integration point is intentionally small: each participant hands its
@@ -46,31 +46,27 @@ participants.
 
 ```mermaid
 flowchart LR
-    A[Site A<br/>local training] -->|masked update| S
-    B[Site B<br/>local training] -->|masked update| S
-    C[Site C<br/>local training] -->|masked update| S
-    S[deki-smpc server<br/>coordinate + aggregate]
-    S -->|verified aggregate| A
-    S -->|verified aggregate| B
-    S -->|verified aggregate| C
+    A["1. Train locally<br/>at each site"] --> B["2. Mask each<br/>model update"]
+    B --> C["3. Server adds<br/>masked updates"]
+    C --> D["4. Sites unmask<br/>and verify the result"]
 ```
 
-During each round, the clients create fresh shared masking material. The masks
-hide every individual upload but cancel when all updates are added together.
-The server publishes the sum, and clients verify its integrity before turning
-it back into PyTorch tensors.
+Protocol `1.1` builds fresh private model keys in parallel blinded groups,
+combines group keys through a logarithmic binary tree, and distributes one
+group-encrypted aggregate key. The server adds masked updates but cannot recover
+the clear aggregate. Each client unmasks and verifies it locally.
 
 ### Why deki-smpc?
 
-- **Private individual updates** — the service stores and processes masked
+- **Private individual updates:** the service stores and processes masked
   model artifacts, not clear participant updates.
-- **Familiar PyTorch workflow** — aggregation returns a state dictionary that
+- **Familiar PyTorch workflow:** aggregation returns a state dictionary that
   can be loaded with `model.load_state_dict(...)`.
-- **Client-side trust** — participants authenticate one another and reject a
+- **Client-side trust:** participants authenticate one another and reject a
   modified or malformed aggregate.
-- **Round-local security** — keys, masks, and integrity material are freshly
+- **Round-local security:** keys, masks, and integrity material are freshly
   generated for every aggregation round.
-- **Production-minded behavior** — HTTPS by default, bounded retries, one
+- **Production-minded behavior:** HTTPS by default, bounded retries, one
   caller-controlled deadline, cancellation, and typed errors.
 
 ## Getting started
@@ -139,13 +135,13 @@ aggregation round.
 
 ## Protocol at a glance
 
-| | deki-smpc v1 |
+| Property | Protocol 1.1 |
 | --- | --- |
 | Designed for | Cross-silo federated learning with known participants |
-| Participants | A complete, fixed set of at least three sites |
+| Participants | Complete, fixed set of at least three sites |
+| Key setup | Parallel groups plus binary reduction |
+| Server result | Remains masked |
 | Aggregation | Equal-weight mean or sum |
-| Individual uploads | Pairwise-masked `int64` tensors |
-| Result | Verified PyTorch state dictionary at every participant |
 | Model artifacts | Safetensors only |
 | Transport | HTTPS by default |
 
@@ -182,22 +178,22 @@ deki-smpc is split into two focused repositories:
 | **`deki-smpc`** (this repository) | Participating sites | Protect updates and verify results |
 | **`deki-smpc-server`** | Service operators | Coordinate rounds and publish aggregates |
 
-The server is deliberately not trusted with individual clear updates. It does
-learn the final aggregate, which is the intended output of the protocol.
+The server is deliberately not trusted with individual clear updates. Under
+protocol `1.1`, it also does not learn the final clear aggregate.
 
 ## Documentation
 
-- **[End-to-end MNIST tutorial](docs/getting-started-mnist.md)** — run a full
+- **[End-to-end MNIST tutorial](docs/getting-started-mnist.md):** run a full
   three-participant federation locally
-- **[Client API](docs/client-api.md)** — configuration, callbacks, policies,
+- **[Client API](docs/client-api.md):** configuration, callbacks, policies,
   and errors
-- **[Security model](docs/security-model.md)** — guarantees, assumptions, and
+- **[Security model](docs/security-model.md):** guarantees, assumptions, and
   trust boundaries
-- **[Protocol v1](docs/protocol-v1.md)** — cryptographic and arithmetic design
-- **[Wire format v1](docs/wire-format-v1.md)** — canonical HTTP and artifact
-  contract
-- **[Development](docs/development.md)** — tests, tooling, and local validation
-- **[Changelog](CHANGELOG.md)** — releases and notable changes
+- **[Protocol 1.1](docs/protocol-v1.1.md):** hardened group and binary-key-tree design
+- **[Wire format 1.1](docs/wire-format-v1.1.md):** additive tree resources and artifacts
+- **[Development](docs/development.md):** tests, tooling, and local validation
+- **[1.0.1 benchmark](docs/benchmark-1.0.1.md):** reproducible observed preparation work and traffic model
+- **[Changelog](CHANGELOG.md):** releases and notable changes
 
 ## Scope and security
 

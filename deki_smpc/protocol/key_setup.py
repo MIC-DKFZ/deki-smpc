@@ -47,13 +47,21 @@ def _xor_ring_mask(key: bytes, domain: bytes, count: int) -> torch.Tensor:
 @dataclass
 class RoundKeyMaterial:
     context: RoundContext
-    private_key: X25519PrivateKey = field(default_factory=X25519PrivateKey.generate)
+    _private_key: X25519PrivateKey | None = field(default_factory=X25519PrivateKey.generate, repr=False)
     seed_share: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     q_share: int = field(default_factory=lambda: secrets.randbelow(FIELD_PRIME))
+    model_key_seed: bytes = field(default_factory=lambda: secrets.token_bytes(32))
+    group_blind_seed: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     peer_keys: dict[str, X25519PublicKey] = field(default_factory=dict)
     integrity_seed: bytes | None = None
     aggregate_q: int | None = None
     consumed: bool = False
+
+    @property
+    def private_key(self) -> X25519PrivateKey:
+        if self._private_key is None or self.consumed:
+            raise ArtifactValidationError("round key material was already consumed")
+        return self._private_key
 
     @property
     def public_key(self) -> str:
@@ -145,3 +153,9 @@ class RoundKeyMaterial:
         self.consumed = True
         self.seed_share = b""
         self.q_share = 0
+        self.model_key_seed = b""
+        self.group_blind_seed = b""
+        self.integrity_seed = None
+        self.aggregate_q = None
+        self.peer_keys.clear()
+        self._private_key = None

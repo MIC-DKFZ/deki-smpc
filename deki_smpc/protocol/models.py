@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-PROTOCOL_VERSION = "1.0"
+LEGACY_PROTOCOL_VERSION = "1.0"
+PROTOCOL_VERSION = "1.1"
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION})
 # Pairwise masking only hides an update when at least three sites take part:
 # a single site masks with zero, and with two sites each can subtract its own
 # update from the aggregate to recover the other.
@@ -16,6 +18,7 @@ class RoundState(StrEnum):
     CREATED = "CREATED"
     REGISTRATION_OPEN = "REGISTRATION_OPEN"
     KEY_SETUP = "KEY_SETUP"
+    KEY_AGGREGATION = "KEY_AGGREGATION"
     UPDATE_COLLECTION = "UPDATE_COLLECTION"
     AGGREGATING = "AGGREGATING"
     RESULT_READY = "RESULT_READY"

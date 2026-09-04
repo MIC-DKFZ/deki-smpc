@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--participants", nargs="+", required=True)
     parser.add_argument("--deadline-seconds", type=int, default=1800)
     parser.add_argument("--precision-bits", type=int, default=24)
+    parser.add_argument("--protocol-version", choices=("1.0", "1.1"), default="1.1")
     parser.add_argument("--ca-bundle", default=env("DEKI_CA_BUNDLE"))
     parser.add_argument("--output", type=Path, help="also write the returned round ID to this file")
     return parser.parse_args()
@@ -54,7 +55,7 @@ def main() -> None:
             "Idempotency-Key": f"mnist-round-{uuid.uuid4()}",
         },
         json={
-            "protocol_version": "1.0",
+            "protocol_version": args.protocol_version,
             "model_schema": schema.as_dict(),
             "model_schema_hash": schema.hash,
             "participants": args.participants,

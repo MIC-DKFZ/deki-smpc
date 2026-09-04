@@ -1,6 +1,6 @@
 """Public package exports for deki_smpc."""
 
-from .clients import FedAvgClient
+from .clients import FedAvgClient, PreparedRound
 from .protocol.errors import (
     AggregateIntegrityError,
     ArtifactValidationError,
@@ -22,6 +22,7 @@ __all__: list[str] = [
     "ConfigurationError",
     "DekiSMPCError",
     "FedAvgClient",
+    "PreparedRound",
     "ProtocolVersionError",
     "RoundConflictError",
     "RoundExpiredError",
