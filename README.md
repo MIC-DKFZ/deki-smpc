@@ -13,8 +13,8 @@ before using it.
 <a href="https://pytorch.org/">
   <img alt="PyTorch 2.13+" src="https://img.shields.io/badge/PyTorch-2.13%2B-EE4C2C?logo=pytorch&amp;logoColor=white">
 </a>
-<a href="docs/protocol-v1.md">
-  <img alt="Protocol v1" src="https://img.shields.io/badge/protocol-v1-6C63FF">
+<a href="docs/protocol-v1.1.md">
+  <img alt="Protocol 1.1" src="https://img.shields.io/badge/protocol-1.1-6C63FF">
 </a>
 <a href="LICENSE">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green.svg">
@@ -63,8 +63,7 @@ flowchart LR
 Protocol `1.1` builds fresh private model keys in parallel blinded groups,
 combines group keys through a logarithmic binary tree, and distributes one
 group-encrypted aggregate key. The server adds masked updates but cannot recover
-the clear aggregate. Each client unmasks and verifies it locally. Legacy wire
-value `1.0` remains available for rolling upgrades.
+the clear aggregate. Each client unmasks and verifies it locally.
 
 ### Why deki-smpc?
 
@@ -145,15 +144,15 @@ aggregation round.
 
 ## Protocol at a glance
 
-| | Protocol 1.1 (default) | Protocol 1.0 (legacy) |
-| --- | --- | --- |
-| Designed for | Cross-silo federated learning with known participants | Rolling compatibility |
-| Participants | Complete, fixed set of at least three sites | Same |
-| Key setup | Parallel groups plus binary reduction | All-to-all pairwise masks |
-| Server result | Remains masked | Clear aggregate |
-| Aggregation | Equal-weight mean or sum | Same |
-| Model artifacts | Safetensors only | Same |
-| Transport | HTTPS by default | Same |
+| Property | Protocol 1.1 |
+| --- | --- |
+| Designed for | Cross-silo federated learning with known participants |
+| Participants | Complete, fixed set of at least three sites |
+| Key setup | Parallel groups plus binary reduction |
+| Server result | Remains masked |
+| Aggregation | Equal-weight mean or sum |
+| Model artifacts | Safetensors only |
+| Transport | HTTPS by default |
 
 ### Tensor behavior
 
@@ -189,8 +188,7 @@ deki-smpc is split into two focused repositories:
 | **`deki-smpc-server`** | Service operators | Coordinate rounds and publish aggregates |
 
 The server is deliberately not trusted with individual clear updates. Under
-the default protocol `1.1`, it also does not learn the final clear aggregate.
-Legacy `1.0` reveals the aggregate to the server.
+protocol `1.1`, it also does not learn the final clear aggregate.
 
 ## Documentation
 
@@ -200,9 +198,6 @@ Legacy `1.0` reveals the aggregate to the server.
   and errors
 - **[Security model](docs/security-model.md)** — guarantees, assumptions, and
   trust boundaries
-- **[Protocol v1](docs/protocol-v1.md)** — cryptographic and arithmetic design
-- **[Wire format v1](docs/wire-format-v1.md)** — canonical HTTP and artifact
-  contract
 - **[Protocol 1.1](docs/protocol-v1.1.md)** — hardened group and binary-key-tree design
 - **[Wire format 1.1](docs/wire-format-v1.1.md)** — additive tree resources and artifacts
 - **[Development](docs/development.md)** — tests, tooling, and local validation
