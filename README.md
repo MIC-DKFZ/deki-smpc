@@ -46,19 +46,25 @@ participants.
 
 ```mermaid
 flowchart LR
-    A[Site A<br/>local training] -->|masked update| S
-    B[Site B<br/>local training] -->|masked update| S
-    C[Site C<br/>local training] -->|masked update| S
-    S[deki-smpc server<br/>coordinate + aggregate]
-    S -->|verified aggregate| A
-    S -->|verified aggregate| B
-    S -->|verified aggregate| C
+    subgraph G1[parallel group 1]
+      A[Site A] --> B[Site B] --> C[Site C]
+    end
+    subgraph G2[parallel group 2]
+      D[Site D] --> E[Site E] --> F[Site F]
+    end
+    C --> T[binary key tree]
+    F --> T
+    T --> K[group-encrypted aggregate key]
+    A & B & C & D & E & F -->|masked updates| S[aggregation server]
+    K --> A & B & C & D & E & F
+    S -->|still-masked aggregate| A & B & C & D & E & F
 ```
 
-During each round, the clients create fresh shared masking material. The masks
-hide every individual upload but cancel when all updates are added together.
-The server publishes the sum, and clients verify its integrity before turning
-it back into PyTorch tensors.
+Protocol `1.1` builds fresh private model keys in parallel blinded groups,
+combines group keys through a logarithmic binary tree, and distributes one
+group-encrypted aggregate key. The server adds masked updates but cannot recover
+the clear aggregate. Each client unmasks and verifies it locally. Legacy wire
+value `1.0` remains available for rolling upgrades.
 
 ### Why deki-smpc?
 
@@ -139,15 +145,15 @@ aggregation round.
 
 ## Protocol at a glance
 
-| | deki-smpc v1 |
-| --- | --- |
-| Designed for | Cross-silo federated learning with known participants |
-| Participants | A complete, fixed set of at least three sites |
-| Aggregation | Equal-weight mean or sum |
-| Individual uploads | Pairwise-masked `int64` tensors |
-| Result | Verified PyTorch state dictionary at every participant |
-| Model artifacts | Safetensors only |
-| Transport | HTTPS by default |
+| | Protocol 1.1 (default) | Protocol 1.0 (legacy) |
+| --- | --- | --- |
+| Designed for | Cross-silo federated learning with known participants | Rolling compatibility |
+| Participants | Complete, fixed set of at least three sites | Same |
+| Key setup | Parallel groups plus binary reduction | All-to-all pairwise masks |
+| Server result | Remains masked | Clear aggregate |
+| Aggregation | Equal-weight mean or sum | Same |
+| Model artifacts | Safetensors only | Same |
+| Transport | HTTPS by default | Same |
 
 ### Tensor behavior
 
@@ -182,8 +188,9 @@ deki-smpc is split into two focused repositories:
 | **`deki-smpc`** (this repository) | Participating sites | Protect updates and verify results |
 | **`deki-smpc-server`** | Service operators | Coordinate rounds and publish aggregates |
 
-The server is deliberately not trusted with individual clear updates. It does
-learn the final aggregate, which is the intended output of the protocol.
+The server is deliberately not trusted with individual clear updates. Under
+the default protocol `1.1`, it also does not learn the final clear aggregate.
+Legacy `1.0` reveals the aggregate to the server.
 
 ## Documentation
 
@@ -196,7 +203,10 @@ learn the final aggregate, which is the intended output of the protocol.
 - **[Protocol v1](docs/protocol-v1.md)** — cryptographic and arithmetic design
 - **[Wire format v1](docs/wire-format-v1.md)** — canonical HTTP and artifact
   contract
+- **[Protocol 1.1](docs/protocol-v1.1.md)** — hardened group and binary-key-tree design
+- **[Wire format 1.1](docs/wire-format-v1.1.md)** — additive tree resources and artifacts
 - **[Development](docs/development.md)** — tests, tooling, and local validation
+- **[1.0.1 benchmark](docs/benchmark-1.0.1.md)** — reproducible observed preparation work and traffic model
 - **[Changelog](CHANGELOG.md)** — releases and notable changes
 
 ## Scope and security

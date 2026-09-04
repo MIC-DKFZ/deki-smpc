@@ -53,6 +53,7 @@ client.aggregate(
     tensor_policies: Mapping[str, TensorPolicy | str] | None = None,
     cancellation_token: Callable[[], bool] | None = None,
     progress_callback: Callable[[dict[str, object]], None] | None = None,
+    prepared_round: PreparedRound | None = None,
 ) -> dict[str, torch.Tensor]
 ```
 
@@ -73,6 +74,23 @@ emits these events in protocol order:
 
 Progress events describe completed local actions. Round status remains
 authoritative on the server.
+
+## prepare_round
+
+`prepare_round(...) -> PreparedRound` accepts the same model, round, timeout,
+policy, cancellation, and progress arguments as `aggregate`. It synchronously
+finishes key setup and, for protocol `1.1`, the group/tree protocol and final-key
+receipt. The returned opaque handle is bound to that client, round, protocol,
+schema, policies, and the original absolute deadline.
+
+The handle is non-serializable, supports `with`, and is consumed as soon as an
+aggregation attempt starts—even if validation then fails. Closing an unused
+handle consumes its key material. `aggregate(..., prepared_round=handle)` does
+not reset the preparation deadline.
+
+Applications may submit `prepare_round` to their own executor while local
+training runs, then pass the completed handle to `aggregate`. Use the same model
+structure and tensor policies; model values may change during training.
 
 ## Exceptions
 

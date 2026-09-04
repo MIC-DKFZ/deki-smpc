@@ -1,8 +1,9 @@
 # deki-smpc protocol v1
 
 This document specifies the secure aggregation protocol implemented by
-`deki-smpc` and `deki-smpc-server` release 1.0.0. The protocol wire value is
-`1.0`.
+This document specifies the legacy protocol wire value `1.0`, preserved
+unchanged in package release 1.0.1. New rounds use
+[protocol 1.1](protocol-v1.1.md) unless an operator explicitly selects `1.0`.
 
 ## Protocol objective
 

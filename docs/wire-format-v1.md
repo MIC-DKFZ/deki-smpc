@@ -1,8 +1,10 @@
 # deki-smpc v1 wire format
 
 This document specifies canonical encodings and HTTP resources for protocol v1.
-The protocol wire value is `1.0`, and all protocol resources use the `/v1`
+This document specifies legacy wire value `1.0`, and all protocol resources use the `/v1`
 prefix.
+
+Package 1.0.1 also supports additive [wire value 1.1](wire-format-v1.1.md).
 
 ## HTTP transport
 
