@@ -32,7 +32,7 @@ for _ in range(int(os.environ.get("DEKI_ROUND_COUNT", "5"))):
             "Idempotency-Key": f"compose-{uuid.uuid4()}",
         },
         json={
-            "protocol_version": "1.0",
+            "protocol_version": "1.1",
             "model_schema": schema.as_dict(),
             "model_schema_hash": schema.hash,
             "participants": ["client-1", "client-2", "client-3"],

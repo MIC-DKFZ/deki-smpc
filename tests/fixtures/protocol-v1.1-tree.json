@@ -1,0 +1,44 @@
+{
+  "protocol_version": "1.1",
+  "context": {
+    "federation_id": "fixture-federation",
+    "round_id": "fixture-round",
+    "model_schema_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+    "participant_manifest_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+    "aggregation_policy": "EQUAL_WEIGHTED",
+    "precision_bits": 24
+  },
+  "ephemeral_manifest": [
+    {"client_id": "client-0", "public_key": "ephemeral-0", "signature": "signature-0"},
+    {"client_id": "client-1", "public_key": "ephemeral-1", "signature": "signature-1"},
+    {"client_id": "client-2", "public_key": "ephemeral-2", "signature": "signature-2"},
+    {"client_id": "client-3", "public_key": "ephemeral-3", "signature": "signature-3"},
+    {"client_id": "client-4", "public_key": "ephemeral-4", "signature": "signature-4"},
+    {"client_id": "client-5", "public_key": "ephemeral-5", "signature": "signature-5"},
+    {"client_id": "client-6", "public_key": "ephemeral-6", "signature": "signature-6"}
+  ],
+  "plan_hash": "ab40178792828b899d3b1b7e8d71e213856b597ec29f69c3cb8591353f5fac8e",
+  "plan": {
+    "protocol_version": "1.1",
+    "participants": ["client-6", "client-0", "client-4", "client-5", "client-2", "client-3", "client-1"],
+    "groups": [
+      {"group_id": 0, "members": ["client-6", "client-0", "client-4", "client-5"], "coordinator": "client-6"},
+      {"group_id": 1, "members": ["client-2", "client-3", "client-1"], "coordinator": "client-2"}
+    ],
+    "tasks": [
+      {"task_id": "g0-start", "action": "GROUP_START", "stage": "GROUP", "level": 0, "sender": "client-6", "receiver": "client-0", "dependencies": []},
+      {"task_id": "g0-add-1", "action": "GROUP_ADD", "stage": "GROUP", "level": 0, "sender": "client-0", "receiver": "client-4", "dependencies": ["g0-start"]},
+      {"task_id": "g0-add-2", "action": "GROUP_ADD", "stage": "GROUP", "level": 0, "sender": "client-4", "receiver": "client-5", "dependencies": ["g0-add-1"]},
+      {"task_id": "g0-add-3", "action": "GROUP_ADD", "stage": "GROUP", "level": 0, "sender": "client-5", "receiver": "client-6", "dependencies": ["g0-add-2"]},
+      {"task_id": "g0-unblind", "action": "GROUP_UNBLIND", "stage": "GROUP", "level": 0, "sender": "client-6", "receiver": "client-6", "dependencies": ["g0-add-3"]},
+      {"task_id": "g1-start", "action": "GROUP_START", "stage": "GROUP", "level": 0, "sender": "client-2", "receiver": "client-3", "dependencies": []},
+      {"task_id": "g1-add-1", "action": "GROUP_ADD", "stage": "GROUP", "level": 0, "sender": "client-3", "receiver": "client-1", "dependencies": ["g1-start"]},
+      {"task_id": "g1-add-2", "action": "GROUP_ADD", "stage": "GROUP", "level": 0, "sender": "client-1", "receiver": "client-2", "dependencies": ["g1-add-1"]},
+      {"task_id": "g1-unblind", "action": "GROUP_UNBLIND", "stage": "GROUP", "level": 0, "sender": "client-2", "receiver": "client-6", "dependencies": ["g1-add-2"]},
+      {"task_id": "t0-0", "action": "TREE_COMBINE", "stage": "TREE", "level": 0, "sender": "client-6", "receiver": "client-6", "dependencies": ["g0-unblind", "g1-unblind"]}
+    ],
+    "root_client_id": "client-6",
+    "root_task_id": "t0-0",
+    "tree_levels": 1
+  }
+}
