@@ -2,6 +2,15 @@
 
 This file records released changes to `deki-smpc`.
 
+## [1.0.2] - 2026-10-07
+
+### Documentation
+
+- Replaced the README overview diagram with an animated walkthrough of the
+  secure aggregation flow.
+- Documented the CKKS, BFV, and BGV encryption and decryption pipelines used as
+  experimental FHE baselines. They are not part of the protocol or client API.
+
 ## [1.0.1] - 2026-09-04
 
 ### Protocol and security

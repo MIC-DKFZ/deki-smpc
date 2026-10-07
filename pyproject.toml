@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "deki-smpc"
-version = "1.0.1"
+version = "1.0.2"
 description = "Round-scoped secure aggregation client"
 readme = "README.md"
 requires-python = ">=3.12"
