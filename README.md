@@ -44,12 +44,9 @@ may still be visible to the central coordinator. deki-smpc closes that gap with 
 round-based secure aggregation protocol built for stable groups of known
 participants.
 
-```mermaid
-flowchart LR
-    A["1. Train locally<br/>at each site"] --> B["2. Mask each<br/>model update"]
-    B --> C["3. Server adds<br/>masked updates"]
-    C --> D["4. Sites unmask<br/>and verify the result"]
-```
+<p align="center">
+  <img alt="Animated overview: sites train locally, mask their model updates, the server adds the masked updates, and sites unmask and verify the result" src="docs/assets/secure-fl-overview.gif" width="800">
+</p>
 
 Protocol `1.1` builds fresh private model keys in parallel blinded groups,
 combines group keys through a logarithmic binary tree, and distributes one
