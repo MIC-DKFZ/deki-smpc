@@ -205,10 +205,21 @@ non-goals.
 
 If deki-smpc supports your research, please cite:
 
-> Hamm, B., Kirchhoff, Y., Rokuss, M., Schader, P., Neher, P.,
-> Parampottupadam, S., Floca, R., & Maier-Hein, K. (2025). *Efficient
-> Privacy-Preserving Medical Cross-Silo Federated Learning*.
-> <https://doi.org/10.36227/techrxiv.174650601.13181048/v1>
+> B. Hamm, Y. Kirchhoff, M. Rokuss, P. Schader, P. Neher, S. Parampottupadam,
+> R. Floca, and K. Maier-Hein, "Efficient Privacy-Preserving Medical Cross-Silo
+> Federated Learning," *IEEE Journal of Biomedical and Health Informatics*,
+> pp. 1–14, 2026. <https://doi.org/10.1109/JBHI.2026.3740976>
+
+```bibtex
+@article{hamm2026efficient,
+  author  = {Hamm, Benjamin and Kirchhoff, Yannick and Rokuss, Maximilian and Schader, Philipp and Neher, Peter and Parampottupadam, Santhosh and Floca, Ralf and Maier-Hein, Klaus},
+  title   = {Efficient Privacy-Preserving Medical Cross-Silo Federated Learning},
+  journal = {IEEE Journal of Biomedical and Health Informatics},
+  year    = {2026},
+  pages   = {1--14},
+  doi     = {10.1109/JBHI.2026.3740976}
+}
+```
 
 ## License
 
