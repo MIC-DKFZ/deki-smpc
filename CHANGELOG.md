@@ -2,6 +2,13 @@
 
 This file records released changes to `deki-smpc`.
 
+## [1.0.3] - 2026-10-08
+
+### Documentation
+
+- Updated the citation to the published IEEE JBHI article
+  (doi:10.1109/JBHI.2026.3740976) and added a BibTeX entry.
+
 ## [1.0.2] - 2026-10-07
 
 ### Documentation
