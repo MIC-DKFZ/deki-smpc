@@ -2,7 +2,7 @@
 
 This file records released changes to `deki-smpc`.
 
-## Unreleased
+## [1.0.3] - 2026-10-08
 
 ### Documentation
 
